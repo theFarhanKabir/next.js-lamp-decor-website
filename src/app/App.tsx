@@ -1,0 +1,3521 @@
+"use client";
+import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
+import {
+  ShoppingBag, ShoppingCart, Heart, Home, Search, User, X, Menu,
+  ChevronRight, ChevronLeft, ChevronDown, Star, Minus, Plus,
+  ArrowRight, ArrowLeft, Check, Package, Truck, Shield, Award,
+  SlidersHorizontal, RotateCcw, Filter, Sliders, CheckSquare, Square
+} from "lucide-react";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface SizeOption { label: string; delta: number; }
+interface FabricOption { label: string; delta: number; }
+interface LegOption { label: string; delta: number; }
+interface Swatch { color: string; label: string; }
+
+interface Product {
+  id: string;
+  name: string;
+  category: string;
+  subcategory: string;
+  description: string;
+  badge?: "new" | "sale" | "pre-order" | "sold-out";
+  basePrice: number;
+  salePrice?: number;
+  rating?: number;
+  reviewCount?: number;
+  swatches: Swatch[];
+  images: { silo: string; lifestyle: string };
+  sizes?: SizeOption[];
+  fabrics?: FabricOption[];
+  legs?: LegOption[];
+  orderType: "in-stock" | "made-to-order";
+  leadTime?: string;
+}
+
+interface CartItem {
+  id: string;
+  product: Product;
+  quantity: number;
+  selectedSize?: string;
+  selectedColor?: string;
+  price: number;
+}
+
+interface ToastItem {
+  id: string;
+  product: Product;
+  variant: string;
+}
+
+type Page = { name: string; params?: Record<string, string> };
+
+interface AppCtx {
+  cart: CartItem[];
+  wishlist: string[];
+  miniCartOpen: boolean;
+  searchOpen: boolean;
+  toasts: ToastItem[];
+  currentPage: Page;
+  navigate: (name: string, params?: Record<string, string>) => void;
+  goBack: () => void;
+  addToCart: (product: Product, opts?: { size?: string; color?: string }) => void;
+  removeFromCart: (id: string) => void;
+  updateQty: (id: string, qty: number) => void;
+  toggleWishlist: (id: string) => void;
+  openMiniCart: () => void;
+  closeMiniCart: () => void;
+  openSearch: () => void;
+  closeSearch: () => void;
+  dismissToast: (id: string) => void;
+  cartCount: number;
+  cartSubtotal: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRELOADER & REVEAL ANIMATION COMPONENTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FALLBACK_IMG = "https://images.unsplash.com/photo-1775667693473-91e07000bb1a?auto=format&fit=crop&w=800&q=80";
+
+function handleImgError(e: React.SyntheticEvent<HTMLImageElement, Event>) {
+  e.currentTarget.onerror = null;
+  e.currentTarget.src = FALLBACK_IMG;
+}
+
+function Preloader({ onComplete }: { onComplete: () => void }) {
+  const [fading, setFading] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setFading(true);
+      setTimeout(onComplete, 600);
+    }, 1300);
+    return () => clearTimeout(timer);
+  }, [onComplete]);
+
+  return (
+    <div
+      className={`fixed inset-0 z-[9999] bg-[#1A1815] text-[#F6F3EC] flex flex-col items-center justify-center transition-opacity duration-700 ease-out ${
+        fading ? "opacity-0 pointer-events-none" : "opacity-100"
+      }`}
+    >
+      {/* Brand Monogram */}
+      <div className="relative mb-6 flex items-center justify-center">
+        <div className="w-16 h-16 rounded-full border border-[#A67C3D]/40 animate-ping absolute inset-0 opacity-30" />
+        <div className="w-16 h-16 rounded-full border border-[#A67C3D] flex items-center justify-center bg-[#1A1815] shadow-2xl">
+          <span className="text-[26px] font-light text-[#EDE3D0]" style={{ fontFamily: "'Fraunces', serif" }}>
+            M
+          </span>
+        </div>
+      </div>
+
+      <h1
+        className="text-[28px] md:text-[34px] font-light tracking-[0.3em] uppercase text-[#F6F3EC] mb-2 text-center"
+        style={{ fontFamily: "'Fraunces', serif" }}
+      >
+        Cloud Lamps & Mirrors
+      </h1>
+      <p className="text-[10px] md:text-[11px] font-medium tracking-[0.35em] uppercase text-[#A67C3D] mb-8 text-center">
+        Lighting, Mirrors, Shades & Tables
+      </p>
+
+      {/* Progress Bar */}
+      <div className="w-44 h-[2px] bg-[#3A3530] rounded-full overflow-hidden relative">
+        <div
+          className="h-full bg-gradient-to-r from-[#A67C3D] via-[#C9A362] to-[#EDE3D0] rounded-full transition-all duration-1000 ease-out"
+          style={{ width: fading ? "100%" : "85%" }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function Reveal({
+  children,
+  delay = 0,
+  className = "",
+  direction = "up",
+}: {
+  children: React.ReactNode;
+  delay?: number;
+  className?: string;
+  direction?: "up" | "down" | "left" | "right" | "none";
+}) {
+  const [visible, setVisible] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.05, rootMargin: "0px 0px -20px 0px" }
+    );
+    if (ref.current) observer.observe(ref.current);
+    return () => observer.disconnect();
+  }, []);
+
+  const getTransform = () => {
+    if (!visible) {
+      if (direction === "up") return "translateY(32px)";
+      if (direction === "down") return "translateY(-32px)";
+      if (direction === "left") return "translateX(32px)";
+      if (direction === "right") return "translateX(-32px)";
+      return "scale(0.97)";
+    }
+    return "translateY(0) translateX(0) scale(1)";
+  };
+
+  return (
+    <div
+      ref={ref}
+      className={`transition-all duration-700 cubic-bezier(0.16, 1, 0.3, 1) ${className}`}
+      style={{
+        opacity: visible ? 1 : 0,
+        transform: getTransform(),
+        transitionDelay: `${delay}ms`,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+const U = (id: string, w = 800) =>
+  `https://images.unsplash.com/${id}?auto=format&fit=crop&w=${w}&q=80`;
+
+const PRODUCTS: Product[] = [
+  {
+    id: "marlow-table-lamp", name: "Marlow Table Lamp", category: "Lighting", subcategory: "Table Lamps",
+    description: "A sculptural ceramic base and softly tapered shade bring a warm, quiet glow to bedside tables and reading corners.",
+    badge: "new", basePrice: 42000, rating: 4.8, reviewCount: 18,
+    swatches: [{ color: "#C9A362", label: "Brushed Brass" }, { color: "#E8E0D4", label: "Ivory" }],
+    images: { silo: U("photo-1564540574859-0dfb63985953"), lifestyle: U("photo-1775667693473-91e07000bb1a") }, orderType: "in-stock",
+  },
+  {
+    id: "solis-pendant", name: "Solis Dome Pendant", category: "Lighting", subcategory: "Pendant Lights",
+    description: "A generous spun-metal shade casts focused, welcoming light over kitchen islands and dining tables.",
+    badge: "new", basePrice: 68000, rating: 4.7, reviewCount: 14,
+    swatches: [{ color: "#C9A362", label: "Warm Brass" }, { color: "#F0EBE0", label: "Chalk" }],
+    images: { silo: U("photo-1775667693473-91e07000bb1a"), lifestyle: U("photo-1778880707611-d1f09e32b4e2") }, orderType: "in-stock",
+  },
+  {
+    id: "oslo-side-table", name: "Oslo Side Table", category: "Tables", subcategory: "Side Tables",
+    description: "A compact oak table with a rounded top, sized for a favourite lamp, a book, and a cup of tea.",
+    basePrice: 54000, rating: 4.9, reviewCount: 32,
+    swatches: [{ color: "#C8A96E", label: "Natural Oak" }, { color: "#6B4B32", label: "Smoked Oak" }],
+    images: { silo: U("photo-1506439773649-6e0eb8cfb237"), lifestyle: U("photo-1784651859128-b04c1d4732f3") }, orderType: "in-stock",
+  },
+  {
+    id: "cleo-wall-sconce", name: "Cleo Wall Sconce", category: "Lighting", subcategory: "Wall Lights",
+    description: "A petite brass wall light with a softly diffused glow for hallways, bedside reading, and layered lighting.",
+    basePrice: 36000, rating: 4.6, reviewCount: 11,
+    swatches: [{ color: "#C9A362", label: "Brushed Brass" }, { color: "#3A3530", label: "Matte Black" }],
+    images: { silo: U("photo-1778880707611-d1f09e32b4e2"), lifestyle: U("photo-1775667693473-91e07000bb1a") }, orderType: "in-stock",
+  },
+  {
+    id: "milo-console-table", name: "Milo Console Table", category: "Tables", subcategory: "Console Tables",
+    description: "A slim oak console creates a considered landing spot for keys, a mirror, and a small accent lamp.",
+    basePrice: 92000, rating: 4.7, reviewCount: 21,
+    swatches: [{ color: "#C8A96E", label: "Natural Oak" }, { color: "#6B4B32", label: "Walnut" }],
+    images: { silo: U("photo-1784651859128-b04c1d4732f3"), lifestyle: U("photo-1542485028-6e019f9c8a8e") }, orderType: "in-stock",
+  },
+  {
+    id: "iris-dining-table", name: "Iris Dining Table", category: "Tables", subcategory: "Dining Tables",
+    description: "A clean-lined solid ash table with room for shared meals, good conversation, and a beautiful pendant overhead.",
+    badge: "sale", basePrice: 180000, salePrice: 155000, rating: 4.9, reviewCount: 27,
+    swatches: [{ color: "#D4B896", label: "Natural Ash" }, { color: "#6B4B32", label: "Walnut" }],
+    images: { silo: U("photo-1784651859128-b04c1d4732f3"), lifestyle: U("photo-1775667693473-91e07000bb1a") }, orderType: "in-stock",
+  },
+  {
+    id: "nora-table-lamp", name: "Nora Glass Table Lamp", category: "Lighting", subcategory: "Table Lamps",
+    description: "Clear, hand-finished glass and a linen shade create an airy accent that works from desk to bedside.",
+    basePrice: 48000, rating: 4.7, reviewCount: 25,
+    swatches: [{ color: "#E8E0D4", label: "Clear Glass" }, { color: "#6B7A8D", label: "Smoked Glass" }],
+    images: { silo: U("photo-1564540574859-0dfb63985953"), lifestyle: U("photo-1780140765084-88e4e0d75528") }, orderType: "in-stock",
+  },
+  {
+    id: "arc-floor-lamp", name: "Arc Floor Lamp", category: "Lighting", subcategory: "Floor Lamps",
+    description: "A slender arched stem and generous linen shade bring warm, adjustable light beside a reading nook.",
+    basePrice: 115000, rating: 4.8, reviewCount: 22,
+    swatches: [{ color: "#E8E0D4", label: "Travertine & Linen" }, { color: "#3A3530", label: "Marble & Charcoal" }],
+    images: { silo: U("photo-1778880707611-d1f09e32b4e2"), lifestyle: U("photo-1775667693473-91e07000bb1a") }, orderType: "in-stock",
+  },
+  {
+    id: "solene-wall-mirror", name: "Solene Arched Wall Mirror", category: "Mirrors", subcategory: "Wall Mirrors",
+    description: "A softly arched mirror framed in warm brushed brass, made to brighten an entryway or dressing space.",
+    basePrice: 68000, rating: 4.8, reviewCount: 14,
+    swatches: [{ color: "#C9A362", label: "Brushed Brass" }, { color: "#3A3530", label: "Matte Black" }],
+    images: { silo: U("photo-1542485028-6e019f9c8a8e"), lifestyle: U("photo-1774428571582-9bd41e95a6ca") }, orderType: "in-stock",
+  },
+  {
+    id: "isla-linen-lamp-shade", name: "Isla Linen Lamp Shade", category: "Shades", subcategory: "Lamp Shades",
+    description: "A tapered natural-linen shade that gives table lamps a warm, softly diffused glow.",
+    basePrice: 18000, rating: 4.6, reviewCount: 11,
+    swatches: [{ color: "#F0EBE0", label: "Natural Linen" }, { color: "#D8C7AD", label: "Warm Sand" }],
+    images: { silo: U("photo-1774444052266-2e4b58d85c3b"), lifestyle: U("photo-1564540574859-0dfb63985953") }, orderType: "in-stock",
+  },
+  {
+    id: "remy-marble-side-table", name: "Remy Marble Side Table", category: "Tables", subcategory: "Side Tables",
+    description: "A pale marble top and fine metal base make an elegant perch for a lamp or a favourite object.",
+    basePrice: 76000, rating: 4.7, reviewCount: 19,
+    swatches: [{ color: "#E8E0D4", label: "White Marble" }, { color: "#9B8E82", label: "Grey Marble" }],
+    images: { silo: U("photo-1506439773649-6e0eb8cfb237"), lifestyle: U("photo-1784651859128-b04c1d4732f3") }, orderType: "in-stock",
+  },
+  {
+    id: "ellery-full-length-mirror", name: "Ellery Full-Length Mirror", category: "Mirrors", subcategory: "Full-Length Mirrors",
+    description: "A generous full-length mirror with a slim oak frame and a clean, timeless profile.",
+    basePrice: 94000, rating: 4.7, reviewCount: 9,
+    swatches: [{ color: "#C8A96E", label: "Natural Oak" }, { color: "#6B4B32", label: "Walnut" }],
+    images: { silo: U("photo-1774428571582-9bd41e95a6ca"), lifestyle: U("photo-1542485028-6e019f9c8a8e") }, orderType: "in-stock",
+  },
+  {
+    id: "marin-pleated-shade", name: "Marin Pleated Shade", category: "Shades", subcategory: "Lamp Shades",
+    description: "A softly pleated cotton shade with a classic silhouette for a calm, layered interior.",
+    basePrice: 22000, rating: 4.8, reviewCount: 8,
+    swatches: [{ color: "#F0EBE0", label: "Ivory" }, { color: "#D9C8B1", label: "Oatmeal" }],
+    images: { silo: U("photo-1774444052266-2e4b58d85c3b"), lifestyle: U("photo-1778880707611-d1f09e32b4e2") }, orderType: "in-stock",
+  },
+  {
+    id: "luna-pendant", name: "Luna Opal Pendant", category: "Lighting", subcategory: "Pendant Lights",
+    description: "A rounded opal-glass pendant diffuses an even, gentle light over dining tables and quiet corners.",
+    badge: "new", basePrice: 58000, rating: 4.8, reviewCount: 16,
+    swatches: [{ color: "#F0EBE0", label: "Opal & Brass" }, { color: "#3A3530", label: "Opal & Black" }],
+    images: { silo: U("photo-1775667693473-91e07000bb1a"), lifestyle: U("photo-1778880707611-d1f09e32b4e2") }, orderType: "in-stock",
+  },
+  {
+    id: "mira-round-mirror", name: "Mira Round Mirror", category: "Mirrors", subcategory: "Round Mirrors",
+    description: "A round, polished-edge mirror that brings light and a calm focal point to any wall.",
+    basePrice: 52000, rating: 4.6, reviewCount: 13,
+    swatches: [{ color: "#C9A362", label: "Brass" }, { color: "#9B8E82", label: "Silver" }],
+    images: { silo: U("photo-1542485028-6e019f9c8a8e"), lifestyle: U("photo-1774428571582-9bd41e95a6ca") }, orderType: "in-stock",
+  },
+  {
+    id: "cole-nesting-tables", name: "Cole Nesting Tables", category: "Tables", subcategory: "Nesting Tables",
+    description: "Two easy-to-move nesting tables add a useful surface beside a favourite chair or beneath a statement mirror.",
+    basePrice: 64000, rating: 4.7, reviewCount: 17,
+    swatches: [{ color: "#D4B896", label: "Natural Ash" }, { color: "#6B4B32", label: "Walnut" }],
+    images: { silo: U("photo-1784651859128-b04c1d4732f3"), lifestyle: U("photo-1506439773649-6e0eb8cfb237") }, orderType: "in-stock",
+  },
+  {
+    id: "noor-velvet-shade", name: "Noor Velvet Lamp Shade", category: "Shades", subcategory: "Lamp Shades",
+    description: "Soft velvet and a warm-toned lining give this tailored shade a rich finish and an inviting evening glow.",
+    basePrice: 26000, rating: 4.8, reviewCount: 12,
+    swatches: [{ color: "#8FA07E", label: "Sage" }, { color: "#6B4B32", label: "Cocoa" }],
+    images: { silo: U("photo-1774444052266-2e4b58d85c3b"), lifestyle: U("photo-1564540574859-0dfb63985953") }, orderType: "in-stock",
+  },
+];
+
+const HERO_SLIDES = [
+  {
+    image: U("photo-1721824296808-92c325601dd8", 1800),
+    eyebrow: "THE SHADE EDIT",
+    headline: "Quiet forms.\nBeautifully reflected.",
+    subtext: "Thoughtful lighting and mirror details for a more balanced home.",
+  },
+  {
+    image: U("photo-1540759772348-12e90305e8f4", 1800),
+    eyebrow: "MIRRORS THAT OPEN A ROOM",
+    headline: "Let the light\nfind its way in.",
+    subtext: "Reflective forms and finely finished frames for everyday spaces.",
+  },
+  {
+    image: U("photo-1716593145277-36e92b658bfe", 1800),
+    eyebrow: "LIGHT, LAYERED",
+    headline: "A softer light\nfor quieter rooms.",
+    subtext: "Sculptural lamps and considered mirrors in calm, cool tones.",
+  },
+];
+
+const CATEGORIES = [
+  { name: "Lamps", count: PRODUCTS.filter((p) => p.category === "Lighting").length, image: U("photo-1778880707611-d1f09e32b4e2", 600), slug: "lighting" },
+  { name: "Mirrors", count: PRODUCTS.filter((p) => p.category === "Mirrors").length, image: U("photo-1542485028-6e019f9c8a8e", 600), slug: "mirrors" },
+  { name: "Tables", count: PRODUCTS.filter((p) => p.subcategory.toLowerCase().includes("table")).length, image: U("photo-1784651859128-b04c1d4732f3", 600), slug: "tables" },
+  { name: "Shades", count: PRODUCTS.filter((p) => p.category === "Shades").length, image: U("photo-1774444052266-2e4b58d85c3b", 600), slug: "shades" },
+  { name: "New Arrivals", count: PRODUCTS.filter((p) => p.badge === "new").length, image: U("photo-1775667693473-91e07000bb1a", 600), slug: "new" },
+  { name: "Sale", count: PRODUCTS.filter((p) => p.salePrice).length, image: U("photo-1542485028-6e019f9c8a8e", 600), slug: "sale" },
+];
+
+const TOP_CATEGORY_PRODUCT_IDS = [
+  "arc-floor-lamp",
+  "solene-wall-mirror",
+  "remy-marble-side-table",
+  "isla-linen-lamp-shade",
+  "luna-pendant",
+  "mira-round-mirror",
+];
+
+const NAV_ITEMS = [
+  { label: "COLLECTIONS", slug: "all", hasMega: false },
+  { label: "LAMPS", slug: "lighting", hasMega: true },
+  { label: "MIRRORS", slug: "mirrors", hasMega: true },
+  { label: "TABLES", slug: "tables", hasMega: true },
+  { label: "SHADES", slug: "shades", hasMega: true },
+];
+
+//
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UTILS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function formatPrice(p: number): string {
+  return "৳" + (p / 100).toLocaleString("en-US", { maximumFractionDigits: 0 });
+}
+
+function resolvePrice(product: Product, size?: string, fabric?: string): number {
+  let price = product.salePrice ?? product.basePrice;
+  if (size && product.sizes) {
+    const s = product.sizes.find((x) => x.label === size);
+    if (s) price += s.delta;
+  }
+  if (fabric && product.fabrics) {
+    const f = product.fabrics.find((x) => x.label === fabric);
+    if (f) price += f.delta;
+  }
+  return price;
+}
+
+function uid() {
+  return Math.random().toString(36).slice(2);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONTEXT
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AppContext = createContext<AppCtx>(null!);
+function useApp() {
+  return useContext(AppContext);
+}
+
+function AppProvider({ children }: { children: React.ReactNode }) {
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [wishlist, setWishlist] = useState<string[]>([]);
+  const [miniCartOpen, setMiniCartOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [currentPage, setCurrentPage] = useState<Page>({ name: "home" });
+  const pageHistory = useRef<Page[]>([]);
+
+  const navigate = useCallback((name: string, params?: Record<string, string>) => {
+    const nextPage = { name, params };
+    if (currentPage.name !== name || JSON.stringify(currentPage.params) !== JSON.stringify(params)) {
+      pageHistory.current.push(currentPage);
+    }
+    setCurrentPage(nextPage);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [currentPage]);
+
+  const goBack = useCallback(() => {
+    const previousPage = pageHistory.current.pop() || { name: "home" };
+    setCurrentPage(previousPage);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+  const addToCart = useCallback((product: Product, opts?: { size?: string; color?: string }) => {
+    const price = resolvePrice(product, opts?.size);
+    setCart((prev) => {
+      const existing = prev.find(
+        (i) => i.product.id === product.id && i.selectedColor === opts?.color
+      );
+      if (existing) {
+        return prev.map((i) =>
+          i.id === existing.id ? { ...i, quantity: i.quantity + 1 } : i
+        );
+      }
+      return [...prev, { id: uid(), product, quantity: 1, selectedSize: opts?.size, selectedColor: opts?.color, price }];
+    });
+    const variant = [opts?.color, opts?.size].filter(Boolean).join(" · ");
+    setToasts((prev) => [...prev, { id: uid(), product, variant }]);
+    setMiniCartOpen(true);
+  }, []);
+
+  const removeFromCart = useCallback((id: string) => {
+    setCart((prev) => prev.filter((i) => i.id !== id));
+  }, []);
+
+  const updateQty = useCallback((id: string, qty: number) => {
+    if (qty <= 0) setCart((prev) => prev.filter((i) => i.id !== id));
+    else setCart((prev) => prev.map((i) => (i.id === id ? { ...i, quantity: qty } : i)));
+  }, []);
+
+  const toggleWishlist = useCallback((id: string) => {
+    setWishlist((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }, []);
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const cartCount = cart.reduce((s, i) => s + i.quantity, 0);
+  const cartSubtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
+
+  return (
+    <AppContext.Provider
+      value={{
+        cart, wishlist, miniCartOpen, searchOpen, toasts, currentPage,
+        navigate, goBack, addToCart, removeFromCart, updateQty, toggleWishlist,
+        openMiniCart: () => setMiniCartOpen(true),
+        closeMiniCart: () => setMiniCartOpen(false),
+        openSearch: () => setSearchOpen(true),
+        closeSearch: () => setSearchOpen(false),
+        dismissToast, cartCount, cartSubtotal,
+      }}
+    >
+      {children}
+    </AppContext.Provider>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRIMITIVES
+// ─────────────────────────────────────────────────────────────────────────────
+
+function BadgeTag({ type }: { type: Product["badge"] }) {
+  if (!type) return null;
+  const cfg = {
+    new: { label: "NEW IN", bg: "#1A1815", color: "#F6F3EC" },
+    sale: { label: "SALE", bg: "#F4E2DB", color: "#B4593F" },
+    "pre-order": { label: "PRE-ORDER", bg: "#F1E6CF", color: "#B07C2E" },
+    "sold-out": { label: "SOLD OUT", bg: "#EFEBE1", color: "#8A8377" },
+  }[type];
+  return (
+    <span
+      className="text-[10px] font-medium tracking-widest uppercase px-2 py-1 rounded-[4px]"
+      style={{ backgroundColor: cfg.bg, color: cfg.color }}
+    >
+      {cfg.label}
+    </span>
+  );
+}
+
+function Stars({ value }: { value: number }) {
+  return (
+    <span className="flex items-center gap-0.5">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <Star
+          key={i} size={11}
+          className={i <= Math.round(value) ? "fill-[#A67C3D] text-[#A67C3D]" : "text-[#DBD5C7]"}
+        />
+      ))}
+    </span>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRODUCT CARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ProductCard({ product, index = 0 }: { product: Product; index?: number }) {
+  const { addToCart, closeMiniCart, toggleWishlist, wishlist, navigate } = useApp();
+  const [hovered, setHovered] = useState(false);
+  const [swatchIdx, setSwatchIdx] = useState(0);
+  const isWished = wishlist.includes(product.id);
+  const displayPrice = product.salePrice ?? product.basePrice;
+
+  return (
+    <Reveal delay={(index % 4) * 70}>
+      <div
+        className="group cursor-pointer"
+        onClick={() => navigate("product", { id: product.id })}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onFocus={() => setHovered(true)}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHovered(false);
+        }}
+      >
+        {/* Image block — 4:5 */}
+        <div
+          className="relative overflow-hidden mb-4 transition-all duration-300"
+          style={{
+            aspectRatio: "4/5",
+            borderRadius: 8,
+            backgroundColor: "#EFEBE1",
+            boxShadow: hovered ? "0 12px 32px -12px rgba(26,24,21,0.18)" : "none",
+            transform: hovered ? "translateY(-4px)" : "none",
+          }}
+        >
+          <img
+            src={product.images.silo}
+            alt={product.name}
+            onError={handleImgError}
+            className="absolute inset-0 w-full h-full object-cover transition-opacity duration-500"
+            style={{ opacity: hovered ? 0 : 1, transform: "scale(1.12)" }}
+          />
+          <img
+            src={product.images.lifestyle}
+            alt=""
+            onError={handleImgError}
+            className="absolute inset-0 w-full h-full object-cover transition-all duration-500"
+            style={{ opacity: hovered ? 1 : 0, transform: hovered ? "scale(1.12)" : "scale(1.08)" }}
+          />
+
+          {product.badge && (
+            <div className="absolute top-3 left-3 z-10">
+              <BadgeTag type={product.badge} />
+            </div>
+          )}
+
+          <button
+            onClick={(e) => { e.stopPropagation(); toggleWishlist(product.id); }}
+            aria-label={isWished ? "Remove from wishlist" : "Add to wishlist"}
+            className="absolute top-3 right-3 z-10 w-9 h-9 flex items-center justify-center rounded-full bg-white/85 backdrop-blur-sm transition-transform duration-200 hover:scale-110"
+          >
+            <Heart size={15} className={isWished ? "fill-[#B4593F] text-[#B4593F]" : "text-[#4A463F]"} />
+          </button>
+
+          {/* Action row */}
+          <div
+            className="absolute inset-x-0 bottom-0 z-10 transition-transform duration-300 ease-out"
+            style={{ transform: hovered ? "translateY(0)" : "translateY(100%)" }}
+          >
+            <div className="bg-gradient-to-t from-black/45 to-transparent pt-8 pb-3 px-3">
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-1.5">
+                  {product.swatches.slice(0, 4).map((sw, i) => (
+                    <button
+                      key={sw.label}
+                      onClick={(e) => { e.stopPropagation(); setSwatchIdx(i); }}
+                      aria-label={`Colour: ${sw.label}`}
+                      className="rounded-full border-2 transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                      style={{
+                        width: 17, height: 17, backgroundColor: sw.color,
+                        borderColor: swatchIdx === i ? "#fff" : "rgba(255,255,255,0.35)",
+                      }}
+                    />
+                  ))}
+                </div>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); addToCart(product, { color: product.swatches[swatchIdx]?.label }); }}
+                    className="flex-1 rounded-full bg-white/90 px-2 py-2 text-[9px] font-medium text-[#1A1815] transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  >
+                    Add to Cart
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      addToCart(product, { color: product.swatches[swatchIdx]?.label });
+                      closeMiniCart();
+                      navigate("checkout");
+                    }}
+                    className="flex-1 rounded-full bg-[#1A1815] px-2 py-2 text-[9px] font-medium text-white transition-colors hover:bg-[#3A3530] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  >
+                    Buy Now
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Info */}
+        <p className="text-[10px] font-medium tracking-widest uppercase text-[#8A8377] mb-1">{product.subcategory}</p>
+        <h4
+          className="text-[14px] font-semibold text-[#1A1815] mb-1 leading-snug"
+          style={{ fontFamily: "Inter, sans-serif" }}
+        >
+          {product.name}
+        </h4>
+        {product.rating && (
+          <div className="flex items-center gap-1.5 mb-2">
+            <Stars value={product.rating} />
+            <span className="text-[11px] text-[#8A8377]">{product.rating} ({product.reviewCount})</span>
+          </div>
+        )}
+        <div className="flex items-baseline gap-2">
+          <span className="text-[14px] font-medium text-[#1A1815]" style={{ fontVariantNumeric: "tabular-nums" }}>
+            {formatPrice(displayPrice)}
+          </span>
+          {product.salePrice && (
+            <span className="text-[12px] text-[#8A8377] line-through" style={{ fontVariantNumeric: "tabular-nums" }}>
+              {formatPrice(product.basePrice)}
+            </span>
+          )}
+        </div>
+      </div>
+    </Reveal>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MEGA MENU
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MEGA_DATA: Record<string, { links: string[] }> = {
+  LAMPS: { links: ["Table Lamps", "Floor Lamps", "Pendant Lights", "Wall Lights", "Desk Lamps"] },
+  MIRRORS: { links: ["Round Mirrors", "Arched Mirrors", "Full-Length Mirrors", "Vanity Mirrors", "Decorative Mirrors"] },
+  TABLES: { links: ["Console Tables", "Side Tables", "Coffee Tables", "Bedside Tables", "Nesting Tables"] },
+  SHADES: { links: ["Linen Shades", "Pleated Shades", "Drum Shades", "Tapered Shades", "Velvet Shades"] },
+};
+function MegaMenu({ category, onClose }: { category: string; onClose: () => void }) {
+  const { navigate } = useApp();
+  const data = MEGA_DATA[category];
+  if (!data) return null;
+  const categorySlug = category === "LAMPS" ? "lighting" : category.toLowerCase();
+
+  return (
+    <div className="absolute top-full left-0 right-0 border-t border-[#DBD5C7] z-50 shadow-[0_16px_48px_-8px_rgba(26,24,21,0.18)]" style={{ backgroundColor: "rgba(251,249,244,0.88)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)" }}>
+      <div className="max-w-[1440px] mx-auto px-8 py-7">
+        <p className="text-[10px] font-medium tracking-widest uppercase text-[#A67C3D] mb-5">Shop {category.toLowerCase()}</p>
+        <ul className="grid grid-cols-5 gap-5">
+          {data.links.map((link) => (
+            <li key={link}>
+              <button
+                onClick={() => { navigate("listing", { category: categorySlug }); onClose(); }}
+                className="text-[13px] text-[#4A463F] hover:text-[#A67C3D] transition-colors text-left"
+              >
+                {link}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+function Header() {
+  const { cartCount, wishlist, navigate, openMiniCart, openSearch, currentPage } = useApp();
+  const [activeMega, setActiveMega] = useState<string | null>(null);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileActiveMenu, setMobileActiveMenu] = useState<string | null>(null);
+  const [scrolled, setScrolled] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const fn = () => setScrolled(window.scrollY > 24);
+    window.addEventListener("scroll", fn, { passive: true });
+    return () => window.removeEventListener("scroll", fn);
+  }, []);
+
+  const onEnter = (label: string, hasMega: boolean) => {
+    if (timer.current) clearTimeout(timer.current);
+    setActiveMega(hasMega ? label : null);
+  };
+  const onLeave = () => {
+    timer.current = setTimeout(() => setActiveMega(null), 160);
+  };
+
+  return (
+    <>
+      <div className={`fixed inset-x-0 top-0 z-50 ${currentPage.name === "home" && !scrolled ? "home-hero-header" : ""}`} onMouseLeave={onLeave}>
+        {/* Utility bar */}
+        <div
+          className="home-header-utility bg-[#1A1815] text-[#F6F3EC] text-center overflow-hidden transition-all duration-300"
+          style={{ height: scrolled ? 0 : 28, opacity: scrolled ? 0 : 1 }}
+        >
+          <div className="h-7 flex items-center justify-center text-[11px] tracking-wide gap-1">
+            Complimentary delivery on orders over ৳15,000 ·{" "}
+            <button className="underline hover:text-[#C9A362] transition-colors">Track your order</button>
+          </div>
+        </div>
+
+        {/* Main bar */}
+        <div
+          className="home-header-bar bg-[#F6F3EC] border-b border-[#DBD5C7] transition-all duration-300"
+          style={{
+            height: scrolled ? 58 : 64,
+            backgroundColor: scrolled || activeMega ? "rgba(246,243,236,0.84)" : undefined,
+            backdropFilter: scrolled || activeMega ? "blur(12px)" : undefined,
+            WebkitBackdropFilter: scrolled || activeMega ? "blur(12px)" : undefined,
+            boxShadow: scrolled ? "0 4px 24px -8px rgba(26,24,21,0.12)" : "none",
+          }}
+        >
+          <div className="max-w-[1440px] mx-auto px-3 md:px-6 h-full flex items-center gap-2 md:gap-6">
+                        <button
+              className="lg:hidden text-[#1A1815]"
+              onClick={() => setMobileOpen(true)}
+              aria-label="Open menu"
+            >
+              <Menu size={22} />
+            </button>
+
+            {/* Wordmark */}
+            <button
+              onClick={() => navigate("home")}
+              className="home-header-wordmark tracking-[0.15em] text-[#1A1815] shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A67C3D] rounded-sm"
+              style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: "clamp(12px, 4vw, 18px)" }}
+            >
+              Cloud Lamps & Mirrors
+            </button>
+
+            {/* Nav */}
+            <nav className="home-header-nav hidden lg:flex items-center gap-7 flex-1 ml-8">
+              {NAV_ITEMS.map((item) => (
+                <button
+                  key={item.label}
+                  onMouseEnter={() => onEnter(item.label, item.hasMega)}
+                  onClick={() => { navigate("listing", { category: item.slug }); setActiveMega(null); }}
+                  className="relative text-[11px] font-medium tracking-widest uppercase text-[#4A463F] hover:text-[#1A1815] transition-colors group/nav py-1 focus-visible:outline-none"
+                >
+                  {item.label}
+                  <span className="absolute bottom-0 left-0 h-px bg-[#A67C3D] transition-all duration-300 origin-left group-hover/nav:w-full w-0" />
+                </button>
+              ))}
+            </nav>
+
+            {/* Actions */}
+            <div className="home-header-actions flex items-center gap-1 ml-auto">
+              {[
+                { icon: Search, label: "Search", action: openSearch },
+                { icon: User, label: "Account", action: () => {} },
+              ].map(({ icon: Icon, label, action }) => (
+                <button
+                  key={label}
+                  aria-label={label}
+                  onClick={action}
+                  className="hidden sm:flex w-10 h-10 items-center justify-center text-[#4A463F] hover:text-[#1A1815] rounded-[4px] hover:bg-[#EFEBE1] transition-colors"
+                >
+                  <Icon size={18} strokeWidth={1.5} />
+                </button>
+              ))}
+
+              <button
+                aria-label={`Wishlist (${wishlist.length})`}
+                onClick={() => navigate("wishlist")}
+                className="relative hidden sm:flex w-10 h-10 items-center justify-center text-[#4A463F] hover:text-[#1A1815] rounded-[4px] hover:bg-[#EFEBE1] transition-colors"
+              >
+                <Heart size={18} strokeWidth={1.5} />
+                {wishlist.length > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-[14px] h-[14px] bg-[#1A1815] text-[#F6F3EC] text-[9px] flex items-center justify-center rounded-full">
+                    {wishlist.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={openMiniCart}
+                aria-label={`Cart (${cartCount})`}
+                className="relative flex w-10 h-10 items-center justify-center text-[#4A463F] hover:text-[#1A1815] rounded-[4px] hover:bg-[#EFEBE1] transition-colors"
+              >
+                <ShoppingBag size={18} strokeWidth={1.5} />
+                {cartCount > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-[14px] h-[14px] bg-[#A67C3D] text-[#F6F3EC] text-[9px] flex items-center justify-center rounded-full">
+                    {cartCount}
+                  </span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Mega */}
+        {activeMega && (
+          <div onMouseEnter={() => { if (timer.current) clearTimeout(timer.current); }}>
+            <MegaMenu category={activeMega} onClose={() => setActiveMega(null)} />
+          </div>
+        )}
+      </div>
+
+      {/* Mobile drawer */}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-[200] lg:hidden">
+          <div className="absolute inset-0 bg-black/25" style={{ backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }} onClick={() => setMobileOpen(false)} />
+          <div className="absolute left-0 top-0 bottom-0 w-80 max-w-[88vw] bg-[#FBF9F4] overflow-y-auto flex flex-col shadow-[16px_0_48px_rgba(0,0,0,0.35)]">
+            <div className="flex items-center justify-between p-5 border-b border-[#DBD5C7]">
+              <span style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 15, letterSpacing: "0.12em" }} className="text-[#1A1815]">
+                Cloud Lamps & Mirrors
+              </span>
+              <button onClick={() => setMobileOpen(false)} aria-label="Close menu" className="text-[#4A463F] hover:text-[#1A1815]">
+                <X size={20} />
+              </button>
+            </div>
+            <nav className="px-5 py-2 flex-1">
+              {NAV_ITEMS.map((item) => {
+                const expanded = mobileActiveMenu === item.label;
+                const subcategories = MEGA_DATA[item.label]?.links ?? [];
+                if (!item.hasMega) {
+                  return (
+                    <button
+                      key={item.label}
+                      onClick={() => { navigate("listing", { category: item.slug }); setMobileOpen(false); }}
+                      className="w-full text-left text-[13px] font-medium text-[#1A1815] py-4 border-b border-[#DBD5C7] flex items-center justify-between"
+                    >
+                      {item.label}
+                      
+                    </button>
+                  );
+                }
+                return (
+                  <div key={item.label} className="border-b border-[#DBD5C7]">
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      onClick={() => setMobileActiveMenu(expanded ? null : item.label)}
+                      className="w-full text-left text-[13px] font-medium text-[#1A1815] py-4 flex items-center justify-between"
+                    >
+                      {item.label}
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#1A1815] text-white"><ChevronRight size={14} className={`transition-transform duration-200 ${expanded ? "rotate-90" : ""}`} /></span>
+                    </button>
+                    {expanded && (
+                      <div className="pb-3 pl-3 flex flex-col">
+                        {subcategories.map((subcategory) => (
+                          <button
+                            key={subcategory}
+                            onClick={() => { navigate("listing", { category: item.slug }); setMobileOpen(false); setMobileActiveMenu(null); }}
+                            className="w-full text-left text-[13px] text-[#4A463F] py-2.5 hover:text-[#1A1815] transition-colors"
+                          >
+                            {subcategory}
+                          </button>
+                        ))}
+                        <button
+                          onClick={() => { navigate("listing", { category: item.slug }); setMobileOpen(false); setMobileActiveMenu(null); }}
+                          className="w-full text-left text-[11px] font-semibold tracking-wide uppercase text-[#C9A362] pt-3 pb-2"
+                        >
+                          Shop all {item.label.toLowerCase()} <ArrowRight size={12} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </nav>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MINI-CART DRAWER
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MiniCartDrawer() {
+  const { cart, miniCartOpen, closeMiniCart, updateQty, removeFromCart, navigate, cartSubtotal } = useApp();
+
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-[200] bg-black/30 transition-opacity duration-300"
+        style={{ opacity: miniCartOpen ? 1 : 0, pointerEvents: miniCartOpen ? "auto" : "none" }}
+        onClick={closeMiniCart}
+      />
+      <div
+        className="fixed right-0 top-0 bottom-0 w-[400px] max-w-full bg-[#FBF9F4] z-[201] flex flex-col transition-transform duration-300"
+        style={{
+          transform: miniCartOpen ? "translateX(0)" : "translateX(100%)",
+          boxShadow: "-16px 0 48px -8px rgba(26,24,21,0.18)",
+        }}
+      >
+        <div className="flex items-center justify-between px-6 py-5 border-b border-[#DBD5C7]">
+          <h2 className="text-[14px] font-semibold text-[#1A1815]">
+            Your cart {cart.length > 0 && <span className="text-[#8A8377] font-normal">({cart.length})</span>}
+          </h2>
+          <button onClick={closeMiniCart} className="text-[#4A463F] hover:text-[#1A1815] transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+          {cart.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-center py-16">
+              <ShoppingBag size={32} strokeWidth={1} className="text-[#DBD5C7] mb-4" />
+              <p className="text-[14px] text-[#8A8377] mb-5">Your cart is empty</p>
+              <button
+                onClick={() => { navigate("listing"); closeMiniCart(); }}
+                className="text-[10px] font-medium tracking-widest uppercase text-[#1A1815] underline underline-offset-2 hover:text-[#A67C3D] transition-colors"
+              >
+                Explore new arrivals
+              </button>
+            </div>
+          ) : (
+            cart.map((item) => (
+              <div key={item.id} className="flex gap-4">
+                <div className="w-20 h-24 rounded-[8px] overflow-hidden bg-[#EFEBE1] shrink-0">
+                  <img src={item.product.images.silo} alt={item.product.name} className="w-full h-full object-cover" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <h4 className="text-[12px] font-semibold text-[#1A1815] leading-snug">{item.product.name}</h4>
+                    <button onClick={() => removeFromCart(item.id)} className="text-[#8A8377] hover:text-[#1A1815] transition-colors shrink-0">
+                      <X size={13} />
+                    </button>
+                  </div>
+                  {item.selectedColor && (
+                    <p className="text-[11px] text-[#8A8377] mb-2">{item.selectedColor}</p>
+                  )}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center border border-[#DBD5C7] rounded-[4px] h-8">
+                      <button onClick={() => updateQty(item.id, item.quantity - 1)} className="w-8 flex items-center justify-center text-[#4A463F] hover:text-[#1A1815] transition-colors">
+                        <Minus size={11} />
+                      </button>
+                      <span className="w-6 text-center text-[12px] font-medium text-[#1A1815]">{item.quantity}</span>
+                      <button onClick={() => updateQty(item.id, item.quantity + 1)} className="w-8 flex items-center justify-center text-[#4A463F] hover:text-[#1A1815] transition-colors">
+                        <Plus size={11} />
+                      </button>
+                    </div>
+                    <span className="text-[13px] font-medium text-[#1A1815]" style={{ fontVariantNumeric: "tabular-nums" }}>
+                      {formatPrice(item.price * item.quantity)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {cart.length > 0 && (
+          <div className="px-6 py-5 border-t border-[#DBD5C7] space-y-3">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[14px] text-[#4A463F]">Subtotal</span>
+              <span className="text-[15px] font-medium text-[#1A1815]" style={{ fontVariantNumeric: "tabular-nums" }}>
+                {formatPrice(cartSubtotal)}
+              </span>
+            </div>
+            <button
+              onClick={() => { navigate("checkout"); closeMiniCart(); }}
+              className="w-full bg-[#1A1815] text-[#F6F3EC] text-[11px] font-medium tracking-widest uppercase py-3.5 rounded-[4px] hover:bg-[#2E2A24] transition-colors flex items-center justify-center gap-2"
+            >
+              Checkout <ArrowRight size={13} />
+            </button>
+            <button
+              onClick={() => { navigate("cart"); closeMiniCart(); }}
+              className="w-full text-center text-[10px] font-medium tracking-widest uppercase text-[#4A463F] hover:text-[#1A1815] transition-colors py-1"
+            >
+              View full cart
+            </button>
+            <p className="text-center text-[11px] text-[#8A8377] flex items-center justify-center gap-1.5">
+              <Check size={11} className="text-[#6F7D5E]" />
+              Complimentary delivery included
+            </p>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TOASTER
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ToastCard({ toast, onDismiss }: { toast: ToastItem; onDismiss: () => void }) {
+  const { openMiniCart } = useApp();
+  const [visible, setVisible] = useState(false);
+  const [progress, setProgress] = useState(1);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setVisible(true));
+    const start = Date.now();
+    const dur = 4000;
+    const iv = setInterval(() => {
+      const pct = 1 - Math.min(1, (Date.now() - start) / dur);
+      setProgress(pct);
+      if (pct <= 0) {
+        clearInterval(iv);
+        setVisible(false);
+        setTimeout(onDismiss, 300);
+      }
+    }, 50);
+    return () => { clearInterval(iv); cancelAnimationFrame(raf); };
+  }, [onDismiss]);
+
+  return (
+    <div
+      className="flex overflow-hidden rounded-[4px] border border-[#DBD5C7] bg-[#FBF9F4] transition-all duration-300"
+      style={{
+        width: 320,
+        boxShadow: "0 8px 24px -4px rgba(26,24,21,0.15)",
+        opacity: visible ? 1 : 0,
+        transform: visible ? "translateY(0)" : "translateY(12px)",
+      }}
+    >
+      <div className="w-1 shrink-0 bg-[#6F7D5E]" />
+      <div className="flex-1 p-4">
+        <div className="flex items-start gap-3 mb-3">
+          <div className="w-12 h-14 rounded-[4px] overflow-hidden bg-[#EFEBE1] shrink-0">
+            <img src={toast.product.images.silo} alt="" className="w-full h-full object-cover" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] font-semibold text-[#1A1815] mb-0.5">Added to cart</p>
+            <p className="text-[11px] text-[#4A463F] truncate">{toast.product.name}</p>
+            {toast.variant && <p className="text-[10px] text-[#8A8377]">{toast.variant}</p>}
+            <button
+              onClick={() => { onDismiss(); openMiniCart(); }}
+              className="text-[10px] font-medium tracking-widest uppercase text-[#A67C3D] mt-1.5 hover:text-[#6B4B32] transition-colors"
+            >
+              View cart
+            </button>
+          </div>
+          <button onClick={onDismiss} className="text-[#8A8377] hover:text-[#1A1815] transition-colors shrink-0">
+            <X size={13} />
+          </button>
+        </div>
+        <div className="h-px bg-[#EFEBE1] overflow-hidden rounded-full">
+          <div
+            className="h-full bg-[#A67C3D] origin-left transition-all duration-75 ease-linear"
+            style={{ transform: `scaleX(${progress})` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Toaster() {
+  const { toasts, dismissToast } = useApp();
+  return (
+    <div className="fixed bottom-6 right-6 z-[300] flex flex-col gap-3 items-end" aria-live="polite">
+      {toasts.slice(-3).map((t) => (
+        <ToastCard key={t.id} toast={t} onDismiss={() => dismissToast(t.id)} />
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FOOTER
+// ─────────────────────────────────────────────────────────────────────────────
+
+function Footer() {
+  const { navigate } = useApp();
+  const cols = [
+    { title: "Shop", links: ["Lamps", "Mirrors", "Tables", "Shades", "Collections"] },
+    { title: "Company", links: ["About", "Craftsmanship", "Careers", "Press"] },
+    { title: "Support", links: ["Shipping & Returns", "Track Order", "Care Guide", "FAQs", "Warranty"] },
+  ];
+
+  return (
+    <footer className="bg-[#1A1815] text-[#F6F3EC] pt-16 pb-8 relative overflow-hidden">
+      {/* Wordmark watermark */}
+      <div
+        className="absolute bottom-2 left-0 right-0 text-center select-none pointer-events-none"
+        style={{
+          fontFamily: "'Cinzel Decorative', serif",
+          fontSize: "clamp(56px, 10vw, 140px)",
+          letterSpacing: "0.12em",
+          color: "rgba(246,243,236,0.04)",
+          lineHeight: 1,
+          whiteSpace: "nowrap",
+        }}
+      >
+        Cloud Lamps & Mirrors
+      </div>
+
+      <div className="relative max-w-[1440px] mx-auto px-8">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-12 mb-16">
+          {/* Brand */}
+          <div className="md:col-span-2">
+            <div
+              className="mb-4 tracking-[0.15em] text-[#F6F3EC]"
+              style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: "clamp(12px, 4vw, 18px)" }}
+            >
+              Cloud Lamps & Mirrors
+            </div>
+            <p className="text-[13px] text-[#F6F3EC]/50 mb-7 max-w-[220px] leading-relaxed">
+              Thoughtful lamps, mirrors, shades, and tables to bring warmth and character home.
+            </p>
+            <div className="flex">
+              <input
+                type="email"
+                placeholder="Your email"
+                className="flex-1 bg-transparent border border-[#F6F3EC]/20 text-[#F6F3EC] placeholder-[#F6F3EC]/30 text-[13px] px-4 py-2.5 rounded-l-[4px] focus:outline-none focus:border-[#A67C3D] transition-colors"
+              />
+              <button className="bg-[#A67C3D] text-[#F6F3EC] text-[10px] font-medium tracking-widest uppercase px-4 py-2.5 rounded-r-[4px] hover:bg-[#C9A362] transition-colors">
+                Join
+              </button>
+            </div>
+          </div>
+
+          {cols.map((col) => (
+            <div key={col.title}>
+              <p className="text-[10px] font-medium tracking-widest uppercase text-[#F6F3EC]/35 mb-5">{col.title}</p>
+              <ul className="space-y-3">
+                {col.links.map((link) => (
+                  <li key={link}>
+                    <button
+                      onClick={() => navigate("listing", { category: link.toLowerCase().replace(/[& ]+/g, "-") })}
+                      className="text-[13px] text-[#F6F3EC]/55 hover:text-[#F6F3EC] transition-colors text-left"
+                    >
+                      {link}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+
+        <div className="border-t border-[#F6F3EC]/10 pt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <p className="text-[11px] text-[#F6F3EC]/30">© 2026 Cloud Lamps & Mirrors. All rights reserved.</p>
+          <div className="flex gap-6">
+            {["Terms", "Privacy", "Cookies"].map((l) => (
+              <button key={l} className="text-[11px] text-[#F6F3EC]/30 hover:text-[#F6F3EC]/60 transition-colors">
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOME — HERO
+// ─────────────────────────────────────────────────────────────────────────────
+
+function HeroSection() {
+  const { navigate } = useApp();
+  const [idx, setIdx] = useState(0);
+  const [fading, setFading] = useState(false);
+
+  const slide = HERO_SLIDES[idx];
+  const changeSlide = (direction: number) => {
+    setIdx((current) => (current + direction + HERO_SLIDES.length) % HERO_SLIDES.length);
+    setFading(false);
+  };
+
+  return (
+    <section className="home-hero-banner relative h-[clamp(380px,48vw,620px)] flex items-end pb-14 overflow-hidden">
+      {HERO_SLIDES.map((s, i) => (
+        <div
+          key={i}
+          className="absolute inset-0 transition-opacity duration-700"
+          style={{ opacity: i === idx ? 1 : 0 }}
+        >
+          <img src={s.image} alt="" className="w-full h-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-r from-[#18242E]/55 via-[#263847]/20 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#12191F]/35 via-transparent to-transparent" />
+        </div>
+      ))}
+
+      <div className="home-hero-copy relative max-w-[1440px] mx-auto px-8 w-full">
+        <div className="max-w-xl">
+          <p
+            className="text-[10px] font-medium tracking-widest uppercase text-[#C9A362] mb-5 transition-all duration-500"
+            style={{ opacity: fading ? 0 : 1, transform: fading ? "translateY(6px)" : "translateY(0)" }}
+          >
+            {slide.eyebrow}
+          </p>
+          <h1
+            className="text-[#F6F3EC] font-light leading-none mb-6 transition-all duration-500 whitespace-pre-line"
+            style={{
+              fontFamily: "'Fraunces', serif",
+              fontSize: "clamp(38px, 5.5vw, 76px)",
+              letterSpacing: "-0.02em",
+              opacity: fading ? 0 : 1,
+              transform: fading ? "translateY(10px)" : "translateY(0)",
+              transitionDelay: "40ms",
+            }}
+          >
+            {slide.headline}
+          </h1>
+          <p
+            className="text-[#F6F3EC]/75 text-[16px] font-light mb-9 transition-all duration-500"
+            style={{
+              opacity: fading ? 0 : 1,
+              transform: fading ? "translateY(6px)" : "translateY(0)",
+              transitionDelay: "80ms",
+            }}
+          >
+            {slide.subtext}
+          </p>
+          <div className="flex items-center gap-5">
+            <button
+              onClick={() => navigate("listing")}
+              className="inline-flex items-center gap-2 bg-[#F6F3EC] text-[#1A1815] text-[11px] font-medium tracking-widest uppercase px-7 py-3.5 rounded-[4px] hover:bg-white transition-colors"
+            >
+              Shop the collection <ArrowRight size={13} />
+            </button>
+            <button className="text-[11px] font-medium tracking-widest uppercase text-[#F6F3EC] hover:text-[#C9A362] transition-colors underline underline-offset-2">
+              Our story
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Manual slide controls */}
+      <button type="button" aria-label="Previous banner" onClick={() => changeSlide(-1)} className="absolute left-4 md:left-8 top-1/2 -translate-y-1/2 z-10 flex h-10 w-10 md:h-12 md:w-12 items-center justify-center rounded-full border border-white/45 bg-white/75 text-[#27323A] shadow-sm backdrop-blur-sm transition hover:bg-white">
+        <ChevronLeft size={20} />
+      </button>
+      <button type="button" aria-label="Next banner" onClick={() => changeSlide(1)} className="absolute right-4 md:right-8 top-1/2 -translate-y-1/2 z-10 flex h-10 w-10 md:h-12 md:w-12 items-center justify-center rounded-full border border-white/45 bg-white/75 text-[#27323A] shadow-sm backdrop-blur-sm transition hover:bg-white">
+        <ChevronRight size={20} />
+      </button>
+
+      {/* Slide indicators */}
+      <div className="absolute bottom-8 right-8 flex items-center gap-2">
+        {HERO_SLIDES.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => { setIdx(i); setFading(false); }}
+            className="rounded-full transition-all duration-300"
+            style={{
+              width: i === idx ? 24 : 6, height: 6,
+              backgroundColor: i === idx ? "#C9A362" : "rgba(255,255,255,0.35)",
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Scroll cue */}
+      <div className="home-hero-scroll-cue absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 opacity-50">
+        <div className="w-px h-10 bg-white animate-pulse" />
+        <ChevronDown size={13} className="text-white" />
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOME — CATEGORIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CategorySection() {
+  const { navigate } = useApp();
+  const topCategoryProducts = TOP_CATEGORY_PRODUCT_IDS
+    .map((id) => PRODUCTS.find((product) => product.id === id))
+    .filter((product): product is Product => Boolean(product));
+  return (
+    <section className="py-14 md:py-16 max-w-[1800px] mx-auto px-6 md:px-8">
+      <Reveal>
+        <div className="mb-7 md:mb-9 flex items-end justify-between">
+          <div>
+            
+            <h2 className="text-[26px] md:text-[30px] font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.01em" }}>
+              Top Categories
+            </h2>
+          </div>
+          <button onClick={() => navigate("listing")} className="text-[11px] md:text-xs border border-[#A67C3D] text-[#1A1815] px-4 py-2 rounded-full hover:bg-[#A67C3D] hover:text-white transition-colors">
+            View all
+          </button>
+        </div>
+      </Reveal>
+      <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-x-3 gap-y-5 md:gap-x-5 md:gap-y-7">
+        {topCategoryProducts.map((product, index) => (
+          <ProductCard key={product.id} product={product} index={index} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOME — BRAND BENTO
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CountUp({ value, duration = 2600 }: { value: number; duration?: number }) {
+  const [count, setCount] = useState(0);
+  const numberRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const node = numberRef.current;
+    if (!node) return;
+
+    let frame = 0;
+    let wasVisible = false;
+    let isAnimating = false;
+    const animate = () => {
+      if (isAnimating) return;
+      isAnimating = true;
+      setCount(0);
+      const startTime = performance.now();
+      const tick = (now: number) => {
+        const progress = Math.min((now - startTime) / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        setCount(Math.round(value * eased));
+        if (progress < 1) frame = requestAnimationFrame(tick);
+        else isAnimating = false;
+      };
+      frame = requestAnimationFrame(tick);
+    };
+
+    if (!("IntersectionObserver" in window)) {
+      animate();
+      return () => cancelAnimationFrame(frame);
+    }
+
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !wasVisible) animate();
+      wasVisible = entry.isIntersecting;
+    }, { threshold: 0, rootMargin: "0px 0px -5% 0px" });
+
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [value, duration]);
+
+  return <span ref={numberRef} aria-label={`${value.toLocaleString()}+`}>{count.toLocaleString()}<span className="text-[0.72em] align-top ml-0.5">+</span></span>;
+}
+
+function BrandBento() {
+  return (
+    <Reveal>
+      <section className="py-20 md:py-24 bg-[#FBF9F4]">
+        <div className="max-w-[1440px] mx-auto px-5 md:px-8">
+          <div className="mb-9 md:mb-11 flex items-end justify-between gap-5">
+            <div>
+              <p className="text-[10px] font-medium tracking-[0.2em] uppercase text-[#8A8377] mb-3">Why Cloud Lamps & Mirrors</p>
+              <h2 className="text-[30px] md:text-[38px] font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.02em" }}>
+                Details that shape a room
+              </h2>
+            </div>
+            <span className="hidden sm:inline-flex items-center gap-2 text-[9px] tracking-[0.16em] uppercase text-[#8A8377] pb-1">
+              <span className="w-7 h-px bg-[#C9A362]" /> Thoughtfully made
+            </span>
+          </div>
+
+          {/* Desktop bento */}
+          <div className="hidden lg:grid lg:grid-cols-12 lg:grid-rows-2 gap-4" style={{ height: 460 }}>
+            <div className="relative overflow-hidden col-span-5 row-span-2 bg-[#1A1815] rounded-2xl p-9 flex flex-col justify-end group">
+              <div className="absolute -right-16 -top-16 w-72 h-72 rounded-full border border-white/[0.08] transition-transform duration-700 group-hover:scale-110" />
+              <div className="absolute -right-5 -top-5 w-52 h-52 rounded-full border border-white/[0.08]" />
+              <div className="absolute right-[4.5rem] top-[4.5rem] w-3 h-3 rounded-full bg-[#C9A362] shadow-[0_0_28px_rgba(201,163,98,0.75)]" />
+              <div className="relative z-10">
+                <p className="text-[9px] font-medium tracking-[0.2em] uppercase text-[#C9A362] mb-5">Crafted with intention</p>
+                <h3 className="text-[30px] font-light text-[#F6F3EC] leading-tight mb-5 whitespace-pre-line" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.02em" }}>
+                  {"Museum-grade craft,\nhonest price."}
+                </h3>
+                <p className="max-w-[390px] text-[13px] text-[#F6F3EC]/60 leading-relaxed">
+                  Every piece at Cloud Lamps & Mirrors is chosen to shape the light, mood, and character of a room.
+                </p>
+              </div>
+              <span className="absolute top-7 left-8 text-[10px] tracking-[0.18em] text-white/35">01 / OUR PROMISE</span>
+            </div>
+
+            <div className="relative overflow-hidden col-span-3 bg-gradient-to-br from-[#F8F6F1] to-[#EEE9DF] border border-[#DBD5C7] rounded-2xl p-7 flex flex-col justify-center group">
+              <span className="absolute -right-5 -top-8 w-28 h-28 rounded-full border border-[#A67C3D]/15 group-hover:scale-110 transition-transform duration-500" />
+              <p className="relative text-[48px] font-light text-[#1A1815] leading-none mb-3" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={2400} /></p>
+              <p className="relative text-[10px] tracking-[0.16em] uppercase text-[#8A8377]">Homes illuminated</p>
+              <span className="absolute bottom-0 left-7 right-7 h-[2px] bg-gradient-to-r from-[#C9A362] via-[#C9A362]/40 to-transparent" />
+            </div>
+
+            <div className="relative overflow-hidden col-span-4 bg-[#E8E6ED] rounded-2xl p-7 flex flex-col justify-center group">
+              <span className="absolute -right-6 -top-9 w-32 h-32 rounded-full border border-[#625B70]/15 group-hover:scale-110 transition-transform duration-500" />
+              <span className="absolute right-8 top-8 w-2 h-2 rounded-full bg-[#766F84]" />
+              <p className="relative text-[48px] font-light text-[#625B70] leading-none mb-3" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={40} /></p>
+              <p className="relative text-[10px] tracking-[0.16em] uppercase text-[#625B70]/80">Artisan partners</p>
+            </div>
+
+            <div className="relative overflow-hidden col-span-3 bg-[#F6F3EC] border border-[#DBD5C7] rounded-2xl p-7 transition-transform duration-300 hover:-translate-y-1">
+              <div className="w-9 h-9 rounded-full bg-[#EDE3D0] flex items-center justify-center mb-5">
+                <Package size={16} className="text-[#A67C3D]" strokeWidth={1.5} />
+              </div>
+              <p className="text-[13px] font-semibold text-[#1A1815] mb-1.5">Ready to ship</p>
+              <p className="text-[11px] text-[#8A8377] leading-relaxed">Small-batch pieces, checked before dispatch.</p>
+            </div>
+
+            <div className="relative overflow-hidden col-span-4 bg-[#E7EADD] rounded-2xl p-7 transition-transform duration-300 hover:-translate-y-1">
+              <div className="w-9 h-9 rounded-full bg-[#6F7D5E]/15 flex items-center justify-center mb-5">
+                <Shield size={16} className="text-[#6F7D5E]" strokeWidth={1.5} />
+              </div>
+              <p className="text-[13px] font-semibold text-[#1A1815] mb-1.5">Quality materials</p>
+              <p className="text-[11px] text-[#4A463F] leading-relaxed">Considered materials: glass, brass, linen, and solid wood.</p>
+            </div>
+          </div>
+
+          {/* Mobile bento */}
+          <div className="lg:hidden grid grid-cols-2 gap-3.5 md:gap-4">
+            <div className="relative overflow-hidden col-span-2 bg-[#1A1815] rounded-2xl p-6 md:p-7">
+              <div className="absolute -right-9 -top-12 w-44 h-44 rounded-full border border-white/[0.08]" />
+              <div className="absolute right-8 top-8 w-2 h-2 rounded-full bg-[#C9A362] shadow-[0_0_20px_rgba(201,163,98,0.8)]" />
+              <div className="relative z-10">
+                <p className="text-[9px] font-medium tracking-[0.2em] uppercase text-[#C9A362] mb-3">Crafted with intention</p>
+                <h3 className="text-[23px] font-light text-[#F6F3EC] leading-tight mb-3" style={{ fontFamily: "'Fraunces', serif" }}>
+                  {"Museum-grade craft,\nhonest price."}
+                </h3>
+                <p className="text-[12px] text-[#F6F3EC]/60 leading-relaxed">Layered light, reflective forms, and useful surfaces for everyday rooms.</p>
+              </div>
+            </div>
+            <div className="relative overflow-hidden bg-gradient-to-br from-[#F8F6F1] to-[#EEE9DF] border border-[#DBD5C7] rounded-2xl p-5">
+              <span className="absolute -right-4 -top-5 w-20 h-20 rounded-full border border-[#A67C3D]/15" />
+              <p className="relative text-[36px] font-light text-[#1A1815] leading-none mb-2" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={2400} /></p>
+              <p className="relative text-[9px] tracking-[0.13em] uppercase text-[#8A8377]">Homes illuminated</p>
+            </div>
+            <div className="relative overflow-hidden bg-[#E8E6ED] rounded-2xl p-5">
+              <span className="absolute -right-4 -top-5 w-20 h-20 rounded-full border border-[#625B70]/15" />
+              <p className="relative text-[36px] font-light text-[#625B70] leading-none mb-2" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={40} /></p>
+              <p className="relative text-[9px] tracking-[0.13em] uppercase text-[#625B70]/80">Artisan partners</p>
+            </div>
+            <div className="bg-[#E7EADD] rounded-2xl p-5">
+              <div className="w-8 h-8 rounded-full bg-[#6F7D5E]/15 flex items-center justify-center mb-4"><Package size={15} className="text-[#6F7D5E]" /></div>
+              <p className="text-[12px] font-semibold text-[#1A1815] mb-1">Ready to ship</p>
+              <p className="text-[10px] text-[#4A463F] leading-relaxed">Checked before dispatch.</p>
+            </div>
+            <div className="bg-[#F6F3EC] border border-[#DBD5C7] rounded-2xl p-5">
+              <div className="w-8 h-8 rounded-full bg-[#E8E6ED] flex items-center justify-center mb-4"><Shield size={15} className="text-[#625B70]" /></div>
+              <p className="text-[12px] font-semibold text-[#1A1815] mb-1">Quality materials</p>
+              <p className="text-[10px] text-[#8A8377] leading-relaxed">Glass, brass, linen, and solid wood.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </Reveal>
+  );
+}
+function HotDeals() {
+  const { addToCart, closeMiniCart, navigate } = useApp();
+  const demoDeals = [
+    { productId: "arc-floor-lamp", name: "Arc Brass Floor Lamp", category: "Floor Lamps", price: 115000, was: 138000, image: "photo-1775667693473-91e07000bb1a" },
+    { productId: "marlow-table-lamp", name: "Marlow Ceramic Table Lamp", category: "Table Lamps", price: 42000, was: 52000, image: "photo-1564540574859-0dfb63985953" },
+    { productId: "solis-pendant", name: "Solis Dome Pendant", category: "Pendant Lights", price: 58000, was: 72000, image: "photo-1778880707611-d1f09e32b4e2" },
+    { productId: "cleo-wall-sconce", name: "Cleo Brass Wall Sconce", category: "Wall Lights", price: 36000, was: 45000, image: "photo-1513506003901-1e6a229e2d15" },
+    { productId: "solene-wall-mirror", name: "Solene Arched Mirror", category: "Wall Mirrors", price: 68000, was: 82000, image: "photo-1542485028-6e019f9c8a8e" },
+    { productId: "mira-round-mirror", name: "Mira Round Mirror", category: "Mirrors", price: 52000, was: 64000, image: "photo-1618221195710-dd6b41faaea6" },
+    { productId: "oslo-side-table", name: "Oslo Oak Side Table", category: "Side Tables", price: 54000, was: 68000, image: "photo-1506439773649-6e0eb8cfb237" },
+    { productId: "remy-marble-side-table", name: "Remy Marble Side Table", category: "Tables", price: 76000, was: 92000, image: "photo-1784651859128-b04c1d4732f3" },
+    { productId: "iris-dining-table", name: "Iris Ash Dining Table", category: "Dining Tables", price: 155000, was: 180000, image: "photo-1519710164239-da123dc03ef4" },
+    { productId: "cole-nesting-tables", name: "Cole Nesting Tables", category: "Nesting Tables", price: 64000, was: 78000, image: "photo-1616486338812-3dadae4b4ace" },
+    { productId: "isla-linen-lamp-shade", name: "Isla Linen Lampshade", category: "Lamp Shades", price: 18000, was: 23000, image: "photo-1774444052266-2e4b58d85c3b" },
+    { productId: "marin-pleated-shade", name: "Marin Pleated Shade", category: "Lamp Shades", price: 22000, was: 28000, image: "photo-1494438639946-1ebd1d20bf85" },
+    { productId: "luna-pendant", name: "Luna Opal Pendant", category: "Pendant Lights", price: 58000, was: 70000, image: "photo-1507473885765-e6ed057f782c" },
+    { productId: "nora-table-lamp", name: "Nora Glass Table Lamp", category: "Table Lamps", price: 48000, was: 59000, image: "photo-1616486029423-aaa4789e8c9a" },
+    { productId: "noor-velvet-shade", name: "Noor Velvet Lampshade", category: "Lamp Shades", price: 26000, was: 32000, image: "photo-1505693416388-ac5ce068fe85" },
+  ];
+
+  return (
+    <section className="py-16 md:py-20 bg-[#FBF9F4]">
+      <div className="max-w-[1800px] mx-auto px-6 md:px-8">
+        <Reveal>
+          <div className="flex items-end justify-between mb-8">
+            <div>
+              <p className="text-[10px] font-medium tracking-widest uppercase text-[#A67C3D] mb-3">Limited-time offers</p>
+              <h2 className="text-[30px] font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.01em" }}>
+                Hot Deals
+              </h2>
+              <p className="text-[13px] text-[#8A8377] mt-2">A few favorites at special prices.</p>
+            </div>
+            <button
+              onClick={() => navigate("listing", { category: "sale" })}
+              className="hidden sm:flex items-center gap-1.5 text-[10px] font-medium tracking-widest uppercase text-[#4A463F] hover:text-[#A67C3D] transition-colors"
+            >
+              View all deals <ArrowRight size={11} />
+            </button>
+          </div>
+        </Reveal>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 md:gap-x-5 gap-y-8 md:gap-y-10">
+          {demoDeals.map((deal, index) => (
+            <Reveal key={`${deal.name}-${index}`} delay={(index % 4) * 50}>
+              {(() => {
+                const product = PRODUCTS.find((item) => item.id === deal.productId);
+                if (!product) return null;
+                return (
+                  <div className="group w-full text-left">
+                    <div className="relative mb-3 aspect-[4/5] overflow-hidden rounded-lg bg-[#EFEBE1]">
+                      <button type="button" onClick={() => navigate("product", { id: product.id })} aria-label={`View ${deal.name}`} className="absolute inset-0 h-full w-full">
+                      <img src={U(deal.image, 700)} alt={deal.name} onError={handleImgError} className="absolute inset-0 h-full w-full scale-[1.12] object-cover transition-transform duration-500 group-hover:scale-[1.16]" />
+                        <span className="absolute top-3 left-3 rounded-full bg-[#A64C3C] px-3 py-1.5 text-[9px] font-semibold tracking-wider uppercase text-white">Hot deal</span>
+                      </button>
+                      <div className="absolute inset-x-0 bottom-0 z-10 translate-y-full bg-gradient-to-t from-black/45 to-transparent px-3 pb-3 pt-12 transition-transform duration-300 group-hover:translate-y-0 group-focus-within:translate-y-0">
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => addToCart(product)} className="flex-1 rounded-full bg-white/90 px-2 py-2 text-[10px] font-medium text-[#1A1815] transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">Add to Cart</button>
+                          <button type="button" onClick={() => { addToCart(product); closeMiniCart(); navigate("checkout"); }} className="flex-1 rounded-full bg-[#1A1815] px-2 py-2 text-[10px] font-medium text-white transition-colors hover:bg-[#3A3530] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">Buy Now</button>
+                        </div>
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => navigate("product", { id: product.id })} className="w-full text-left">
+                      <p className="text-[10px] font-medium tracking-widest uppercase text-[#8A8377] mb-1">{deal.category}</p>
+                      <p className="text-[13px] md:text-sm font-semibold text-[#1A1815] group-hover:text-[#A67C3D] transition-colors">{deal.name}</p>
+                      <div className="flex items-baseline gap-2 mt-1.5">
+                        <span className="text-[13px] font-medium text-[#1A1815]">{formatPrice(deal.price)}</span>
+                        <span className="text-[11px] text-[#8A8377] line-through">{formatPrice(deal.was)}</span>
+                      </div>
+                    </button>
+                  </div>
+                );
+              })()}
+            </Reveal>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+function EditorialBreak() {
+  return (
+    <section className="relative overflow-hidden" style={{ height: "65vh", minHeight: 480 }}>
+      <picture className="absolute inset-0 h-full w-full">
+        <source
+          media="(max-width: 639px)"
+          srcSet="https://images.unsplash.com/photo-1737467034151-16e643c905c7?auto=format&fit=crop&crop=entropy&w=1000&h=1400&q=82"
+        />
+        <source
+          media="(min-width: 1024px)"
+          srcSet="https://images.unsplash.com/photo-1737467034151-16e643c905c7?auto=format&fit=crop&crop=entropy&w=2400&h=900&q=82"
+        />
+        <source
+          media="(min-width: 640px)"
+          srcSet="https://images.unsplash.com/photo-1737467034151-16e643c905c7?auto=format&fit=crop&crop=entropy&w=1600&h=1000&q=82"
+        />
+        <img
+          src={U("photo-1737467034151-16e643c905c7", 1600)}
+          alt="A calm purple-toned bedroom with a lamp and bookshelf"
+          className="h-full w-full object-cover object-center"
+        />
+      </picture>
+      <div className="absolute inset-0 bg-gradient-to-r from-[#282531]/65 via-[#383343]/25 to-[#302C3A]/15" />
+      <div className="relative h-full flex items-center max-w-[1440px] mx-auto px-8">
+        <div className="max-w-[500px]">
+          <p className="text-[10px] font-medium tracking-widest uppercase text-[#C9A362] mb-5">Our craft</p>
+          <h2
+            className="text-[#F6F3EC] font-light leading-tight mb-6"
+            style={{
+              fontFamily: "'Fraunces', serif",
+              fontSize: "clamp(28px, 3.5vw, 42px)",
+              letterSpacing: "-0.01em",
+            }}
+          >
+            We <em>shape</em> light and <em>reflection</em> for the way you live.
+          </h2>
+          <p className="text-[15px] text-[#F6F3EC]/70 mb-8 leading-relaxed">
+            From a softly glowing shade to a well-placed mirror, each detail helps a room feel more considered.
+          </p>
+          <button className="text-[10px] font-medium tracking-widest uppercase text-[#F6F3EC] flex items-center gap-2 hover:text-[#C9A362] transition-colors underline underline-offset-2">
+            Read our story <ArrowRight size={11} />
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOME — SERVICE STRIP
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ServiceStrip() {
+  const items = [
+    { Icon: Truck, label: "Careful delivery", desc: "On orders over ৳15,000" },
+    { Icon: Package, label: "Thoughtfully selected", desc: "Selected for everyday use" },
+    { Icon: Shield, label: "1-year warranty", desc: "Lighting and mirror finish" },
+    { Icon: Award, label: "Easy styling advice", desc: "Ask us for a pairing" },
+  ];
+  return (
+    <section className="py-14 border-y border-[#DBD5C7]">
+      <div className="max-w-[1440px] mx-auto px-8">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-8">
+          {items.map(({ Icon, label, desc }) => (
+            <div key={label} className="flex items-start gap-4">
+              <Icon size={19} className="text-[#A67C3D] mt-0.5 shrink-0" strokeWidth={1.5} />
+              <div>
+                <p className="text-[12px] font-semibold text-[#1A1815] mb-0.5">{label}</p>
+                <p className="text-[11px] text-[#8A8377]">{desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOME — PRE-FOOTER CTA
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PreFooterCTA() {
+  const { navigate } = useApp();
+  return (
+    <section className="py-24 bg-[#1A1815]">
+      <div className="max-w-[1440px] mx-auto px-8 text-center">
+        <h2
+          className="font-light text-[#F6F3EC] mb-9 max-w-2xl mx-auto leading-tight"
+          style={{
+            fontFamily: "'Fraunces', serif",
+            fontSize: "clamp(32px, 4vw, 52px)",
+            letterSpacing: "-0.02em",
+          }}
+        >
+          Customize your own creation at home.
+        </h2>
+        <div className="flex items-center justify-center gap-4 flex-wrap">
+          <button
+            onClick={() => navigate("custom-request")}
+            className="inline-flex items-center gap-2 bg-[#F6F3EC] text-[#1A1815] text-[11px] font-medium tracking-widest uppercase px-7 py-3.5 rounded-[4px] hover:bg-white transition-colors"
+          >
+            Give us a reference <ArrowRight size={13} />
+          </button>
+          <button className="inline-flex items-center gap-2 border border-[#F6F3EC]/30 text-[#F6F3EC] text-[11px] font-medium tracking-widest uppercase px-7 py-3.5 rounded-[4px] hover:border-[#F6F3EC]/70 transition-colors">
+            Chat in Messenger
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOME PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+
+function HomePage() {
+  return (
+    <>
+      <HeroSection />
+      <CategorySection />
+      <div className="h-px bg-[#DBD5C7] max-w-[1440px] mx-auto" />
+      <HotDeals />
+      <PreFooterCTA />
+      <EditorialBreak />
+      <ServiceStrip />
+      <BrandBento />
+      <Footer />
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FILTER DATA & HELPER FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MATERIAL_OPTIONS = [
+  { id: "Oak", label: "Oak Wood" },
+  { id: "Walnut", label: "Walnut Wood" },
+  { id: "Linen", label: "Natural Linen" },
+  { id: "Cotton", label: "Cotton" },
+  { id: "Velvet", label: "Velvet" },
+  { id: "Marble", label: "Natural Marble" },
+  { id: "Brass", label: "Brass" },
+  { id: "Glass", label: "Glass" },
+  { id: "Ceramic", label: "Ceramic" },
+];
+
+const COLOR_OPTIONS = [
+  { id: "Beige", label: "Beige / Dune", hex: "#D8C7AD" },
+  { id: "Charcoal", label: "Charcoal / Black", hex: "#3A3530" },
+  { id: "Sage", label: "Sage Green", hex: "#8FA07E" },
+  { id: "Ivory", label: "Ivory / Off-White", hex: "#F0EBE0" },
+  { id: "Walnut", label: "Walnut Brown", hex: "#6B4B32" },
+  { id: "Oak", label: "Natural Oak", hex: "#C8A96E" },
+  { id: "Brass", label: "Brass / Gold", hex: "#C9A362" },
+  { id: "Sand", label: "Sand / Stoneware", hex: "#C8B49A" },
+  { id: "Slate", label: "Slate Grey", hex: "#6B7A8D" },
+];
+
+const BADGE_OPTIONS = [
+  { id: "new", label: "New Arrivals" },
+  { id: "sale", label: "Hot Deals" },
+];
+
+function matchesMaterial(p: Product, selected: string[]) {
+  if (selected.length === 0) return true;
+  const haystack = (
+    p.name + " " +
+    p.description + " " +
+    (p.fabrics?.map((f) => f.label).join(" ") || "") + " " +
+    (p.legs?.map((l) => l.label).join(" ") || "")
+  ).toLowerCase();
+  return selected.some((m) => haystack.includes(m.toLowerCase()));
+}
+
+function matchesColor(p: Product, selected: string[]) {
+  if (selected.length === 0) return true;
+  return selected.some((c) =>
+    p.swatches.some((s) => s.label.toLowerCase().includes(c.toLowerCase()))
+  );
+}
+
+function matchesBadge(p: Product, selected: string[]) {
+  if (selected.length === 0) return true;
+  if (selected.includes("sale") && p.salePrice) return true;
+  if (selected.includes("new") && p.badge === "new") return true;
+  return false;
+}
+
+function matchesPrice(p: Product, min: number, max: number) {
+  const price = (p.salePrice ?? p.basePrice) / 100;
+  return price >= min && price <= max;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LISTING PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ListingPage({ params }: { params?: Record<string, string> }) {
+  const { navigate } = useApp();
+  const cat = params?.category || "all";
+  const [sort, setSort] = useState("relevance");
+  const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
+
+  // Filter States
+  const [selectedMaterials, setSelectedMaterials] = useState<string[]>([]);
+  const [selectedColors, setSelectedColors] = useState<string[]>([]);
+  const [selectedBadges, setSelectedBadges] = useState<string[]>([]);
+
+  // Calculate catalog min & max prices
+  const catalogPrices = PRODUCTS.map((p) => (p.salePrice ?? p.basePrice) / 100);
+  const ABS_MIN = Math.floor(Math.min(...catalogPrices) / 10) * 10;
+  const ABS_MAX = Math.ceil(Math.max(...catalogPrices) / 100) * 100;
+
+  const [minPrice, setMinPrice] = useState<number>(ABS_MIN);
+  const [maxPrice, setMaxPrice] = useState<number>(ABS_MAX);
+
+  const catLabel =
+    cat === "all" ? "All Products" : CATEGORIES.find((c) => c.slug === cat)?.name || "Collection";
+
+  // 1. Base category products
+  const categoryProducts = PRODUCTS.filter((p) => {
+    if (cat === "all") return true;
+    if (cat === "sale") return !!p.salePrice;
+    if (cat === "new") return p.badge === "new";
+    const norm = p.category.toLowerCase().replace(/[& ]+/g, "-");
+    const subcategory = p.subcategory.toLowerCase();
+    if (cat === "mirrors") return subcategory.includes("mirror");
+    if (cat === "tables") return subcategory.includes("table");
+    if (cat === "shades") return p.category === "Shades" || subcategory.includes("shade");
+    return norm.includes(cat.split("-")[0]);
+  });
+
+  const priceSpan = Math.max(1, ABS_MAX - ABS_MIN);
+  const priceBuckets = Array.from({ length: 12 }, (_, index) => {
+    const lower = ABS_MIN + (priceSpan * index) / 12;
+    const upper = ABS_MIN + (priceSpan * (index + 1)) / 12;
+    return categoryProducts.filter((p) => {
+      const price = (p.salePrice ?? p.basePrice) / 100;
+      return price >= lower && (index === 11 ? price <= upper : price < upper);
+    }).length;
+  });
+  const maxPriceBucket = Math.max(1, ...priceBuckets);
+  // Reset filters when category changes
+  useEffect(() => {
+    setSelectedMaterials([]);
+    setSelectedColors([]);
+    setSelectedBadges([]);
+    setMinPrice(ABS_MIN);
+    setMaxPrice(ABS_MAX);
+  }, [cat]);
+
+  // Dynamic count calculators (computed relative to base categoryProducts)
+  const getMaterialCount = (id: string) =>
+    categoryProducts.filter((p) => matchesMaterial(p, [id])).length;
+  const getColorCount = (id: string) =>
+    categoryProducts.filter((p) => matchesColor(p, [id])).length;
+  const getBadgeCount = (id: string) =>
+    categoryProducts.filter((p) => matchesBadge(p, [id])).length;
+
+  // 2. Fully filtered products
+  const filtered = categoryProducts.filter((p) => {
+    if (!matchesMaterial(p, selectedMaterials)) return false;
+    if (!matchesColor(p, selectedColors)) return false;
+    if (!matchesBadge(p, selectedBadges)) return false;
+    if (!matchesPrice(p, minPrice, maxPrice)) return false;
+    return true;
+  });
+
+  // 3. Sorted products
+  const sorted = [...filtered].sort((a, b) => {
+    if (sort === "price-asc") return (a.salePrice ?? a.basePrice) - (b.salePrice ?? b.basePrice);
+    if (sort === "price-desc") return (b.salePrice ?? b.basePrice) - (a.salePrice ?? a.basePrice);
+    if (sort === "rating") return (b.rating ?? 0) - (a.rating ?? 0);
+    if (sort === "newest") return (a.badge === "new" ? -1 : 1);
+    return 0;
+  });
+
+  // Toggle helpers
+  const toggleMaterial = (id: string) =>
+    setSelectedMaterials((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  const toggleColor = (id: string) =>
+    setSelectedColors((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  const toggleBadge = (id: string) =>
+    setSelectedBadges((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+
+  const resetAllFilters = () => {
+    setSelectedMaterials([]);
+    setSelectedColors([]);
+    setSelectedBadges([]);
+    setMinPrice(ABS_MIN);
+    setMaxPrice(ABS_MAX);
+  };
+
+  const activeFilterCount =
+    selectedMaterials.length +
+    selectedColors.length +
+    selectedBadges.length +
+    (minPrice > ABS_MIN || maxPrice < ABS_MAX ? 1 : 0);
+
+  // Render Filter Controls Content
+  const renderFilterSidebar = () => (
+    <div className="space-y-7">
+      {/* Special Collection / Badge Filter */}
+      <div className="pb-6 border-b border-[#DBD5C7]">
+        <p className="text-[11px] font-semibold tracking-wider uppercase text-[#1A1815] mb-3.5">
+          Special Edition
+        </p>
+        <div className="space-y-2">
+          {BADGE_OPTIONS.map((opt) => {
+            const cnt = getBadgeCount(opt.id);
+            const isChecked = selectedBadges.includes(opt.id);
+            return (
+              <label
+                key={opt.id}
+                onClick={() => toggleBadge(opt.id)}
+                className={`flex items-center justify-between cursor-pointer py-1 px-2 rounded-md transition-colors ${
+                  isChecked ? "bg-[#EDE3D0]/60 font-medium" : "hover:bg-[#EFEBE1]/50"
+                } ${cnt === 0 ? "opacity-45 pointer-events-none" : ""}`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                      isChecked
+                        ? "bg-[#1A1815] border-[#1A1815] text-[#F6F3EC]"
+                        : "border-[#B9B1A0] bg-white"
+                    }`}
+                  >
+                    {isChecked && <Check size={11} strokeWidth={3} />}
+                  </div>
+                  <span className="text-[13px] text-[#1A1815]">{opt.label}</span>
+                </div>
+                <span className="text-[11px] font-mono text-[#8A8377]">({cnt})</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Price Range Filter */}
+      <div className="pb-6 border-b border-[#DBD5C7]">
+        <div className="flex items-center justify-between mb-3.5">
+          <p className="text-[11px] font-semibold tracking-wider uppercase text-[#1A1815]">
+            Price Range
+          </p>
+          {(minPrice > ABS_MIN || maxPrice < ABS_MAX) && (
+            <button
+              onClick={() => {
+                setMinPrice(ABS_MIN);
+                setMaxPrice(ABS_MAX);
+              }}
+              className="text-[10px] text-[#B4593F] hover:underline flex items-center gap-0.5"
+            >
+              <RotateCcw size={10} /> Reset
+            </button>
+          )}
+        </div>
+
+        {/* Price distribution */}
+        <div className="h-10 flex items-end gap-[3px] px-0.5 mb-2" aria-hidden="true">
+          {priceBuckets.map((count, index) => {
+            const lower = ABS_MIN + (priceSpan * index) / priceBuckets.length;
+            const upper = ABS_MIN + (priceSpan * (index + 1)) / priceBuckets.length;
+            const inRange = upper >= minPrice && lower <= maxPrice;
+            const barHeight = count === 0 ? 3 : Math.max(6, (count / maxPriceBucket) * 38);
+            return (
+              <div
+                key={index}
+                className="flex-1 rounded-t-[3px] transition-all duration-200"
+                style={{ height: `${barHeight}px`, backgroundColor: inRange ? "#1A1815" : "#DBD5C7", opacity: count === 0 ? 0.55 : 1 }}
+              />
+            );
+          })}
+        </div>
+        {/* Inputs */}
+        <div className="flex items-center gap-2 mb-3">
+          <div className="relative flex-1">
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] text-[#8A8377] font-medium">
+              ৳
+            </span>
+            <input
+              type="number"
+              value={minPrice === 0 ? "" : minPrice}
+              min={0}
+              max={maxPrice}
+              onChange={(e) => {
+                const val = e.target.value === "" ? 0 : Number(e.target.value);
+                setMinPrice(Math.max(0, val));
+              }}
+              className="w-full text-[12px] font-medium text-[#1A1815] bg-[#FBF9F4] border border-[#DBD5C7] rounded-[4px] pl-6 pr-2 py-1.5 focus:outline-none focus:border-[#A67C3D]"
+              placeholder={String(ABS_MIN)}
+            />
+          </div>
+          <span className="text-[#8A8377] text-[12px] font-medium">–</span>
+          <div className="relative flex-1">
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] text-[#8A8377] font-medium">
+              ৳
+            </span>
+            <input
+              type="number"
+              value={maxPrice === ABS_MAX ? "" : maxPrice}
+              min={minPrice}
+              max={ABS_MAX}
+              onChange={(e) => {
+                const val = e.target.value === "" ? ABS_MAX : Number(e.target.value);
+                setMaxPrice(Math.min(ABS_MAX, val));
+              }}
+              className="w-full text-[12px] font-medium text-[#1A1815] bg-[#FBF9F4] border border-[#DBD5C7] rounded-[4px] pl-6 pr-2 py-1.5 focus:outline-none focus:border-[#A67C3D]"
+              placeholder={String(ABS_MAX)}
+            />
+          </div>
+        </div>
+
+        {/* Dual-handle price range */}
+        <div
+          className="price-range-track relative h-5 mb-1.5 mx-1"
+          style={{
+            background: `linear-gradient(to right, #DBD5C7 ${((minPrice - ABS_MIN) / priceSpan) * 100}%, #1A1815 ${((minPrice - ABS_MIN) / priceSpan) * 100}%, #1A1815 ${((maxPrice - ABS_MIN) / priceSpan) * 100}%, #DBD5C7 ${((maxPrice - ABS_MIN) / priceSpan) * 100}%)`,
+          }}
+        >
+          <input
+            aria-label="Minimum price"
+            type="range"
+            min={ABS_MIN}
+            max={Math.max(ABS_MIN + 50, maxPrice - 50)}
+            step={50}
+            value={minPrice}
+            onChange={(e) => setMinPrice(Math.min(maxPrice - 50, Number(e.target.value)))}
+            className="price-range-input price-range-min"
+          />
+          <input
+            aria-label="Maximum price"
+            type="range"
+            min={Math.min(ABS_MAX - 50, minPrice + 50)}
+            max={ABS_MAX}
+            step={50}
+            value={maxPrice}
+            onChange={(e) => setMaxPrice(Math.max(minPrice + 50, Number(e.target.value)))}
+            className="price-range-input price-range-max"
+          />
+        </div>
+        <div className="flex justify-between text-[10px] font-mono text-[#8A8377] mb-3.5">
+          <span>&#2547;{minPrice.toLocaleString()}</span>
+          <span>&#2547;{maxPrice.toLocaleString()}</span>
+        </div>
+        {/* Quick Presets */}
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            { label: "All", min: ABS_MIN, max: ABS_MAX },
+            { label: "< ৳500", min: ABS_MIN, max: 500 },
+            { label: "৳500–৳1.5k", min: 500, max: 1500 },
+            { label: "৳1.5k+", min: 1500, max: ABS_MAX },
+          ].map((p) => {
+            const isActive = minPrice === p.min && maxPrice === p.max;
+            return (
+              <button
+                key={p.label}
+                onClick={() => {
+                  setMinPrice(p.min);
+                  setMaxPrice(p.max);
+                }}
+                className={`text-[10px] px-2 py-1 rounded border transition-all ${
+                  isActive
+                    ? "bg-[#1A1815] text-[#F6F3EC] border-[#1A1815] font-medium"
+                    : "bg-transparent text-[#4A463F] border-[#DBD5C7] hover:border-[#1A1815]"
+                }`}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Material Filter */}
+      <div className="pb-6 border-b border-[#DBD5C7]">
+        <p className="text-[11px] font-semibold tracking-wider uppercase text-[#1A1815] mb-3.5">
+          Material
+        </p>
+        <div className="space-y-2">
+          {MATERIAL_OPTIONS.map((opt) => {
+            const cnt = getMaterialCount(opt.id);
+            const isChecked = selectedMaterials.includes(opt.id);
+            return (
+              <label
+                key={opt.id}
+                onClick={() => toggleMaterial(opt.id)}
+                className={`flex items-center justify-between cursor-pointer py-1 px-2 rounded-md transition-colors ${
+                  isChecked ? "bg-[#EDE3D0]/60 font-medium" : "hover:bg-[#EFEBE1]/50"
+                } ${cnt === 0 ? "opacity-45 pointer-events-none" : ""}`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                      isChecked
+                        ? "bg-[#1A1815] border-[#1A1815] text-[#F6F3EC]"
+                        : "border-[#B9B1A0] bg-white"
+                    }`}
+                  >
+                    {isChecked && <Check size={11} strokeWidth={3} />}
+                  </div>
+                  <span className="text-[13px] text-[#1A1815]">{opt.label}</span>
+                </div>
+                <span className="text-[11px] font-mono text-[#8A8377]">({cnt})</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Color Filter */}
+      <div className="pb-4">
+        <p className="text-[11px] font-semibold tracking-wider uppercase text-[#1A1815] mb-3.5">
+          Colour Palette
+        </p>
+        <div className="space-y-2">
+          {COLOR_OPTIONS.map((opt) => {
+            const cnt = getColorCount(opt.id);
+            const isChecked = selectedColors.includes(opt.id);
+            return (
+              <label
+                key={opt.id}
+                onClick={() => toggleColor(opt.id)}
+                className={`flex items-center justify-between cursor-pointer py-1 px-2 rounded-md transition-colors ${
+                  isChecked ? "bg-[#EDE3D0]/60 font-medium" : "hover:bg-[#EFEBE1]/50"
+                } ${cnt === 0 ? "opacity-45 pointer-events-none" : ""}`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className="w-4 h-4 rounded-full border border-black/20 shrink-0 shadow-sm"
+                    style={{ backgroundColor: opt.hex }}
+                  />
+                  <span className="text-[13px] text-[#1A1815]">{opt.label}</span>
+                </div>
+                <span className="text-[11px] font-mono text-[#8A8377]">({cnt})</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      {/* Header Banner */}
+      <div className="max-w-[1800px] mx-auto px-8 py-10 border-b border-[#DBD5C7]">
+        <div className="flex items-center gap-2 text-[11px] text-[#8A8377] mb-4">
+          <button onClick={() => navigate("home")} className="hover:text-[#1A1815] transition-colors">
+            Home
+          </button>
+          <span>/</span>
+          <span className="text-[#4A463F]">{catLabel}</span>
+        </div>
+        <div className="flex items-end justify-between">
+          <div>
+            <h1
+              className="text-[38px] md:text-[44px] font-light text-[#1A1815]"
+              style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.01em" }}
+            >
+              {catLabel}
+            </h1>
+            <p className="text-[13px] text-[#8A8377] mt-1">
+              Thoughtful lighting and objects for everyday living
+            </p>
+          </div>
+          <p className="text-[13px] font-medium text-[#1A1815] mb-1.5 hidden sm:block">
+            Showing {sorted.length} {sorted.length === 1 ? "piece" : "pieces"}
+          </p>
+        </div>
+      </div>
+
+      <div className="max-w-[1800px] mx-auto px-8 py-8">
+        {/* Category Pill Bar & Controls */}
+        <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
+          <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+            {[{ label: "All", slug: "all" }, ...CATEGORIES.slice(0, 5)].map((c) => {
+              const isSelected = cat === ("slug" in c ? c.slug : "all");
+              return (
+                <button
+                  key={"slug" in c ? c.slug : "all"}
+                  onClick={() => navigate("listing", { category: "slug" in c ? c.slug : "all" })}
+                  className="shrink-0 text-[10px] font-medium tracking-widest uppercase px-4 py-2 rounded-full border transition-all duration-200 whitespace-nowrap"
+                  style={{
+                    borderColor: isSelected ? "#1A1815" : "#DBD5C7",
+                    backgroundColor: isSelected ? "#1A1815" : "transparent",
+                    color: isSelected ? "#F6F3EC" : "#4A463F",
+                  }}
+                >
+                  {"name" in c ? c.name : "All"}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center gap-3 ml-auto">
+            {/* Mobile Filter Trigger */}
+            <button
+              onClick={() => setMobileFilterOpen(true)}
+              className="lg:hidden inline-flex items-center gap-2 text-[12px] font-medium text-[#1A1815] bg-[#FBF9F4] border border-[#DBD5C7] rounded-[4px] px-3.5 py-2 hover:bg-[#EFEBE1] transition-colors"
+            >
+              <SlidersHorizontal size={14} />
+              <span>Filters</span>
+              {activeFilterCount > 0 && (
+                <span className="w-5 h-5 rounded-full bg-[#1A1815] text-[#F6F3EC] text-[10px] font-bold flex items-center justify-center">
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
+
+            {/* Sort Dropdown */}
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+              className="text-[12px] font-medium text-[#4A463F] bg-[#FBF9F4] border border-[#DBD5C7] rounded-[4px] px-3 py-2 focus:outline-none focus:border-[#A67C3D] cursor-pointer"
+            >
+              <option value="relevance">Sort: Relevance</option>
+              <option value="newest">Newest First</option>
+              <option value="price-asc">Price: Low to High</option>
+              <option value="price-desc">Price: High to Low</option>
+              <option value="rating">Highest Rated</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Active Filter Chips Bar */}
+        {activeFilterCount > 0 && (
+          <div className="flex items-center flex-wrap gap-2 mb-8 p-3.5 bg-[#FBF9F4] border border-[#DBD5C7] rounded-md transition-all">
+            <span className="font-semibold text-[#1A1815] uppercase text-[10px] tracking-wider mr-1">
+              Active Filters:
+            </span>
+
+            {selectedBadges.map((id) => (
+              <span
+                key={id}
+                className="inline-flex items-center gap-1.5 bg-[#EDE3D0] text-[#1A1815] text-[11px] font-medium px-3 py-1 rounded-full border border-[#B9B1A0]"
+              >
+                {BADGE_OPTIONS.find((o) => o.id === id)?.label}
+                <button
+                  onClick={() => toggleBadge(id)}
+                  className="hover:text-[#B4593F] transition-colors"
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+
+            {selectedMaterials.map((id) => (
+              <span
+                key={id}
+                className="inline-flex items-center gap-1.5 bg-[#EDE3D0] text-[#1A1815] text-[11px] font-medium px-3 py-1 rounded-full border border-[#B9B1A0]"
+              >
+                Material: {id}
+                <button
+                  onClick={() => toggleMaterial(id)}
+                  className="hover:text-[#B4593F] transition-colors"
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+
+            {selectedColors.map((id) => (
+              <span
+                key={id}
+                className="inline-flex items-center gap-1.5 bg-[#EDE3D0] text-[#1A1815] text-[11px] font-medium px-3 py-1 rounded-full border border-[#B9B1A0]"
+              >
+                Colour: {id}
+                <button
+                  onClick={() => toggleColor(id)}
+                  className="hover:text-[#B4593F] transition-colors"
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+
+            {(minPrice > ABS_MIN || maxPrice < ABS_MAX) && (
+              <span className="inline-flex items-center gap-1.5 bg-[#EDE3D0] text-[#1A1815] text-[11px] font-medium px-3 py-1 rounded-full border border-[#B9B1A0]">
+                Price: ৳{minPrice.toLocaleString()} – ৳{maxPrice.toLocaleString()}
+                <button
+                  onClick={() => {
+                    setMinPrice(ABS_MIN);
+                    setMaxPrice(ABS_MAX);
+                  }}
+                  className="hover:text-[#B4593F] transition-colors"
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            )}
+
+            <button
+              onClick={resetAllFilters}
+              className="text-[11px] font-semibold text-[#B4593F] hover:underline ml-auto flex items-center gap-1 py-1"
+            >
+              <RotateCcw size={12} /> Clear All
+            </button>
+          </div>
+        )}
+
+        <div className="flex gap-10 items-start">
+          {/* Desktop Filter Sidebar Rail */}
+          <aside className="hidden lg:block w-60 shrink-0 sticky top-[88px] max-h-[calc(100vh-100px)] overflow-y-auto pr-2" style={{ scrollbarWidth: "thin" }}>
+            <div className="flex items-center justify-between mb-6 pb-3 border-b border-[#DBD5C7]">
+              <p className="text-[11px] font-bold tracking-widest uppercase text-[#1A1815]">
+                Filter Collection
+              </p>
+              {activeFilterCount > 0 && (
+                <button
+                  onClick={resetAllFilters}
+                  className="text-[11px] font-medium text-[#B4593F] hover:underline"
+                >
+                  Reset ({activeFilterCount})
+                </button>
+              )}
+            </div>
+
+            {renderFilterSidebar()}
+          </aside>
+
+          {/* Product Grid Area */}
+          <div className="flex-1 min-w-0">
+            {sorted.length > 0 ? (
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-5 gap-y-10">
+                {sorted.flatMap((p, i) => {
+                  const cards = [<ProductCard key={p.id} product={p} />];
+                  if ((i + 1) % 9 === 0) {
+                    cards.push(
+                      <div
+                        key={`custom-${i}`}
+                        className="bg-[#1A1815] rounded-lg p-7 flex flex-col justify-between"
+                        style={{ minHeight: 320 }}
+                      >
+                        <div>
+                          <p className="text-[10px] font-medium tracking-widest uppercase text-[#A67C3D] mb-4">
+                            Bespoke
+                          </p>
+                          <h3
+                            className="text-[20px] font-light text-[#F6F3EC] mb-3 leading-snug"
+                            style={{ fontFamily: "'Fraunces', serif" }}
+                          >
+                            Looking for something custom?
+                          </h3>
+                          <p className="text-[12px] text-[#F6F3EC]/55 leading-relaxed">
+                            Any dimension, any material. Ask us for a pairing.
+                          </p>
+                        </div>
+                        <button className="mt-5 inline-flex items-center gap-2 text-[10px] font-medium tracking-widest uppercase text-[#F6F3EC] border border-[#F6F3EC]/25 px-4 py-2.5 rounded-[4px] hover:border-[#F6F3EC]/55 transition-colors self-start">
+                          Start a request <ArrowRight size={11} />
+                        </button>
+                      </div>
+                    );
+                  }
+                  return cards;
+                })}
+              </div>
+            ) : (
+              <div className="py-24 px-6 text-center bg-[#FBF9F4] border border-[#DBD5C7] rounded-lg">
+                <Filter size={32} className="mx-auto text-[#8A8377] mb-3 opacity-60" />
+                <h3
+                  className="text-[22px] font-light text-[#1A1815] mb-2"
+                  style={{ fontFamily: "'Fraunces', serif" }}
+                >
+                  No pieces match your exact criteria
+                </h3>
+                <p className="text-[13px] text-[#8A8377] mb-6 max-w-md mx-auto">
+                  Try broadening your price range, clearing selected materials or color swatches to view more options.
+                </p>
+                <button
+                  onClick={resetAllFilters}
+                  className="inline-flex items-center gap-2 text-[11px] font-medium tracking-widest uppercase bg-[#1A1815] text-[#F6F3EC] px-6 py-3 rounded-[4px] hover:bg-[#2E2A24] transition-colors"
+                >
+                  <RotateCcw size={12} /> Reset All Filters
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile Filter Drawer */}
+      {mobileFilterOpen && (
+        <div className="fixed inset-0 z-50 flex lg:hidden">
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
+            onClick={() => setMobileFilterOpen(false)}
+          />
+          {/* Drawer content */}
+          <div className="relative ml-auto w-full max-w-sm bg-[#F6F3EC] h-full shadow-2xl flex flex-col p-6 overflow-y-auto z-10">
+            <div className="flex items-center justify-between pb-4 border-b border-[#DBD5C7] mb-6">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal size={18} className="text-[#1A1815]" />
+                <h3
+                  className="text-[18px] font-light text-[#1A1815]"
+                  style={{ fontFamily: "'Fraunces', serif" }}
+                >
+                  Filters
+                </h3>
+              </div>
+              <button
+                onClick={() => setMobileFilterOpen(false)}
+                className="p-1 rounded-full text-[#4A463F] hover:bg-[#EFEBE1]"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto pr-1">{renderFilterSidebar()}</div>
+
+            <div className="pt-6 mt-6 border-t border-[#DBD5C7] flex gap-3">
+              <button
+                onClick={resetAllFilters}
+                className="flex-1 border border-[#DBD5C7] text-[#1A1815] text-[11px] font-medium tracking-widest uppercase py-3 rounded-[4px] hover:bg-[#EFEBE1] transition-colors"
+              >
+                Reset
+              </button>
+              <button
+                onClick={() => setMobileFilterOpen(false)}
+                className="flex-1 bg-[#1A1815] text-[#F6F3EC] text-[11px] font-medium tracking-widest uppercase py-3 rounded-[4px] hover:bg-[#2E2A24] transition-colors"
+              >
+                Apply ({sorted.length})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <Footer />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRODUCT PAGE (PDP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ProductPage({ params }: { params?: Record<string, string> }) {
+  const { navigate, addToCart } = useApp();
+  const product = PRODUCTS.find((p) => p.id === params?.id) || PRODUCTS[0];
+
+  const [selectedSize, setSelectedSize] = useState(product.sizes?.[1]?.label ?? product.sizes?.[0]?.label);
+  const [selectedFabric, setSelectedFabric] = useState(product.fabrics?.[0]?.label);
+  const [selectedLeg, setSelectedLeg] = useState(product.legs?.[0]?.label);
+  const [colorIdx, setColorIdx] = useState(0);
+  const [imgIdx, setImgIdx] = useState(0);
+  const [tab, setTab] = useState("description");
+  const dimensionRows = product.category === "Mirrors"
+    ? [["Width", "60 cm"], ["Depth", "4 cm"], ["Height", "90 cm"], ["Frame", "Brushed finish"], ["Weight", "6.5 kg"]]
+    : product.category === "Tables"
+      ? [["Width", "55 cm"], ["Depth", "45 cm"], ["Height", "52 cm"], ["Top", "Solid surface"], ["Weight", "8 kg"]]
+      : product.category === "Shades"
+        ? [["Diameter", "30 cm"], ["Height", "22 cm"], ["Fitter", "Standard ring"], ["Fabric", "Linen or cotton"], ["Weight", "0.5 kg"]]
+        : [["Width", "28 cm"], ["Depth", "28 cm"], ["Height", "46 cm"], ["Shade", "26 cm diameter"], ["Weight", "2.8 kg"]];
+  const materialRows = product.category === "Mirrors"
+    ? [["Mirror", "Clear polished glass"], ["Frame", "Brass or solid wood"], ["Mounting", "Wall-ready fittings"], ["Care", "Clean with a soft cloth"], ["Warranty", "1-year quality cover"]]
+    : product.category === "Tables"
+      ? [["Materials", "Solid wood, marble, or metal"], ["Finish", "Hand-finished surface"], ["Assembly", "Simple home assembly"], ["Care", "Wipe with a soft dry cloth"], ["Warranty", "1-year quality cover"]]
+      : product.category === "Shades"
+        ? [["Fabric", "Linen, cotton, or velvet"], ["Lining", "Softly diffusing"], ["Fitter", "Standard lamp fitting"], ["Care", "Dust with a soft brush"], ["Warranty", "1-year quality cover"]]
+        : [["Materials", "Glass, brass, ceramic, and linen"], ["Finish", "Hand-finished surface"], ["Light", "Warm ambient glow"], ["Care", "Dust with a soft dry cloth"], ["Warranty", "1-year quality cover"]];
+
+  const mockImages = [product.images.silo, product.images.lifestyle, product.images.silo, product.images.lifestyle];
+  const basePrice = product.salePrice ?? product.basePrice;
+  const currentPrice = resolvePrice(product, selectedSize, selectedFabric);
+
+  const legDelta = selectedLeg && product.legs ? (product.legs.find((l) => l.label === selectedLeg)?.delta ?? 0) : 0;
+  const totalPrice = currentPrice + legDelta;
+
+  const breakdown: { label: string; value: number; prefix?: string }[] = [
+    { label: `${product.name} (base)`, value: basePrice },
+  ];
+  if (selectedSize && product.sizes) {
+    const s = product.sizes.find((x) => x.label === selectedSize);
+    if (s && s.delta !== 0) breakdown.push({ label: `${selectedSize} size`, value: s.delta, prefix: "+" });
+  }
+  if (selectedFabric && product.fabrics) {
+    const f = product.fabrics.find((x) => x.label === selectedFabric);
+    if (f && f.delta !== 0) breakdown.push({ label: `${selectedFabric} fabric`, value: f.delta, prefix: "+" });
+  }
+  if (legDelta !== 0) breakdown.push({ label: `${selectedLeg} leg finish`, value: legDelta, prefix: "+" });
+
+  return (
+    <div>
+      <div className="max-w-[1800px] mx-auto px-8 py-4">
+        <div className="flex items-center gap-2 text-[11px] text-[#8A8377]">
+          {[
+            { label: "Home", action: () => navigate("home") },
+            { label: product.category, action: () => navigate("listing", { category: product.category.toLowerCase().replace(/ /g, "-") }) },
+            { label: product.subcategory, action: () => navigate("listing", { category: product.category.toLowerCase().replace(/ /g, "-") }) },
+          ].flatMap(({ label, action }, i) => [
+            ...(i > 0 ? [<span key={`sep-${i}`}>/</span>] : []),
+            <button key={label} onClick={action} className="hover:text-[#1A1815] transition-colors">{label}</button>,
+          ])}
+          <span>/</span>
+          <span className="text-[#4A463F]">{product.name}</span>
+        </div>
+      </div>
+
+      <div className="max-w-[1800px] mx-auto px-8 pb-20">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-14 lg:gap-20">
+
+          {/* Gallery */}
+          <div className="lg:sticky lg:top-[88px] self-start">
+            <div
+              className="relative rounded-lg overflow-hidden bg-[#EFEBE1] mb-4"
+              style={{ aspectRatio: "4/5" }}
+            >
+              <img src={mockImages[imgIdx]} alt={product.name} className="h-full w-full scale-[1.08] object-cover transition-opacity duration-300" />
+              {imgIdx > 0 && (
+                <button
+                  onClick={() => setImgIdx((i) => i - 1)}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 bg-white/85 backdrop-blur-sm rounded-full flex items-center justify-center hover:bg-white transition-colors"
+                >
+                  <ChevronLeft size={16} className="text-[#1A1815]" />
+                </button>
+              )}
+              {imgIdx < mockImages.length - 1 && (
+                <button
+                  onClick={() => setImgIdx((i) => i + 1)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 bg-white/85 backdrop-blur-sm rounded-full flex items-center justify-center hover:bg-white transition-colors"
+                >
+                  <ChevronRight size={16} className="text-[#1A1815]" />
+                </button>
+              )}
+              <div className="absolute bottom-3 right-3 bg-black/30 text-white text-[10px] px-2.5 py-1 rounded-full backdrop-blur-sm">
+                {imgIdx + 1}/{mockImages.length}
+              </div>
+            </div>
+            <div className="flex gap-3">
+              {mockImages.map((img, i) => (
+                <button
+                  key={i}
+                  onClick={() => setImgIdx(i)}
+                  className="overflow-hidden rounded-lg transition-all duration-200"
+                  style={{
+                    width: 68, height: 80,
+                    opacity: imgIdx === i ? 1 : 0.45,
+                    outline: imgIdx === i ? "2px solid #1A1815" : "2px solid transparent",
+                    outlineOffset: 2,
+                  }}
+                >
+                  <img src={img} alt="" className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Config */}
+          <div>
+            {/* Badges */}
+            <div className="flex flex-wrap gap-2 mb-5">
+              {product.badge && <BadgeTag type={product.badge} />}
+              {product.orderType === "made-to-order" && (
+                <span className="text-[10px] font-medium tracking-widest uppercase bg-[#F1E6CF] text-[#B07C2E] px-2 py-1 rounded-[4px]">
+                  IN PRODUCTION · {(product.leadTime ?? "6-wk").toUpperCase()} LEAD
+                </span>
+              )}
+            </div>
+
+            <p className="text-[10px] font-medium tracking-widest uppercase text-[#8A8377] mb-2">{product.subcategory}</p>
+            <h1
+              className="text-[32px] md:text-[38px] font-light text-[#1A1815] mb-3 leading-tight"
+              style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.01em" }}
+            >
+              {product.name}
+            </h1>
+
+            {product.rating && (
+              <div className="flex items-center gap-2 mb-5">
+                <Stars value={product.rating} />
+                <span className="text-[12px] text-[#8A8377]">{product.rating} ({product.reviewCount} reviews)</span>
+              </div>
+            )}
+
+            <div className="h-px bg-[#DBD5C7] mb-6" />
+
+            {/* Size */}
+            {product.sizes && (
+              <div className="mb-6">
+                <p className="text-[10px] font-medium tracking-widest uppercase text-[#4A463F] mb-3">Size</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {product.sizes.map((sz) => (
+                    <button
+                      key={sz.label}
+                      onClick={() => setSelectedSize(sz.label)}
+                      className="px-4 py-3 rounded-[4px] border text-left transition-all duration-150"
+                      style={{
+                        borderColor: selectedSize === sz.label ? "#1A1815" : "#DBD5C7",
+                        backgroundColor: selectedSize === sz.label ? "#EFEBE1" : "transparent",
+                      }}
+                    >
+                      <p className="text-[12px] font-semibold text-[#1A1815]">{sz.label}</p>
+                      <p className="text-[11px] text-[#8A8377]">
+                        {sz.delta === 0
+                          ? `From ${formatPrice(basePrice)}`
+                          : sz.delta > 0
+                          ? `+${formatPrice(sz.delta)}`
+                          : formatPrice(basePrice + sz.delta)}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Colour */}
+            {product.swatches.length > 0 && (
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-[10px] font-medium tracking-widest uppercase text-[#4A463F]">Colour</p>
+                  <p className="text-[12px] text-[#4A463F]">{product.swatches[colorIdx].label}</p>
+                </div>
+                <div className="flex gap-2.5">
+                  {product.swatches.map((sw, i) => (
+                    <button
+                      key={sw.label}
+                      onClick={() => { setColorIdx(i); setImgIdx(0); }}
+                      aria-label={`Colour: ${sw.label}`}
+                      className="rounded-full border-2 transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A67C3D]"
+                      style={{
+                        width: 26, height: 26, backgroundColor: sw.color,
+                        borderColor: colorIdx === i ? "#1A1815" : "#DBD5C7",
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Fabric */}
+            {product.fabrics && (
+              <div className="mb-6">
+                <p className="text-[10px] font-medium tracking-widest uppercase text-[#4A463F] mb-3">Fabric</p>
+                <div className="flex flex-wrap gap-2">
+                  {product.fabrics.map((f) => (
+                    <button
+                      key={f.label}
+                      onClick={() => setSelectedFabric(f.label)}
+                      className="px-4 py-2 rounded-[4px] border text-[12px] transition-all duration-150"
+                      style={{
+                        borderColor: selectedFabric === f.label ? "#1A1815" : "#DBD5C7",
+                        backgroundColor: selectedFabric === f.label ? "#1A1815" : "transparent",
+                        color: selectedFabric === f.label ? "#F6F3EC" : "#4A463F",
+                      }}
+                    >
+                      {f.label}
+                      {f.delta > 0 && <span className="ml-1 opacity-55 text-[10px]">+{formatPrice(f.delta)}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Leg finish */}
+            {product.legs && (
+              <div className="mb-6">
+                <p className="text-[10px] font-medium tracking-widest uppercase text-[#4A463F] mb-3">Leg Finish</p>
+                <div className="flex flex-wrap gap-2">
+                  {product.legs.map((l) => (
+                    <button
+                      key={l.label}
+                      onClick={() => setSelectedLeg(l.label)}
+                      className="px-4 py-2 rounded-[4px] border text-[12px] transition-all duration-150"
+                      style={{
+                        borderColor: selectedLeg === l.label ? "#1A1815" : "#DBD5C7",
+                        backgroundColor: selectedLeg === l.label ? "#1A1815" : "transparent",
+                        color: selectedLeg === l.label ? "#F6F3EC" : "#4A463F",
+                      }}
+                    >
+                      {l.label}
+                      {l.delta > 0 && <span className="ml-1 opacity-55 text-[10px]">+{formatPrice(l.delta)}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="h-px bg-[#DBD5C7] mb-6" />
+
+            {/* Price + breakdown */}
+            <div className="mb-6">
+              <div className="flex items-baseline gap-3 mb-4">
+                <span
+                  className="text-[34px] font-light text-[#1A1815]"
+                  style={{ fontFamily: "'Fraunces', serif", fontVariantNumeric: "tabular-nums" }}
+                >
+                  {formatPrice(totalPrice)}
+                </span>
+                {product.orderType === "made-to-order" && (
+                  <span className="text-[12px] text-[#8A8377]">{product.leadTime} lead · free delivery</span>
+                )}
+              </div>
+
+              {breakdown.length > 1 && (
+                <div className="bg-[#FBF9F4] border border-[#DBD5C7] rounded-[4px] p-4 space-y-2.5">
+                  {breakdown.map((line, i) => (
+                    <div key={i} className="flex items-center justify-between text-[11px]" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+                      <span className="text-[#4A463F]">{line.label}</span>
+                      <span className="text-[#1A1815]">{line.prefix}{formatPrice(line.value)}</span>
+                    </div>
+                  ))}
+                  <div className="h-px bg-[#DBD5C7]" />
+                  <div className="flex items-center justify-between text-[11px] font-semibold" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+                    <span className="text-[#1A1815]">Total</span>
+                    <span className="text-[#1A1815]">{formatPrice(totalPrice)}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* CTA */}
+            <div className="flex gap-3 mb-5">
+              <button
+                onClick={() =>
+                  addToCart(product, {
+                    size: selectedSize,
+                    color: product.swatches[colorIdx]?.label,
+                  })
+                }
+                className="flex-1 bg-[#1A1815] text-[#F6F3EC] text-[11px] font-medium tracking-widest uppercase py-4 rounded-[4px] hover:bg-[#2E2A24] transition-colors flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A67C3D]"
+              >
+                Add to cart — {formatPrice(totalPrice)}
+              </button>
+              <button
+                aria-label="Add to wishlist"
+                className="w-14 border border-[#DBD5C7] rounded-[4px] flex items-center justify-center text-[#4A463F] hover:border-[#B9B1A0] hover:bg-[#EFEBE1] transition-colors"
+              >
+                <Heart size={18} strokeWidth={1.5} />
+              </button>
+            </div>
+
+            {/* Assurances */}
+            <div className="grid grid-cols-2 gap-2 mb-5">
+              {["30-day returns", "1-year warranty", "Free delivery", "Easy setup"].map((a) => (
+                <div key={a} className="flex items-center gap-2 text-[11px] text-[#4A463F]">
+                  <Check size={11} className="text-[#6F7D5E] shrink-0" />
+                  {a}
+                </div>
+              ))}
+            </div>
+
+            <p className="text-[12px] text-[#8A8377]">
+              Looking for another finish or shade?{" "}
+              <button className="text-[#A67C3D] hover:text-[#6B4B32] transition-colors underline underline-offset-2">
+                Ask about available options →
+              </button>
+            </p>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="mt-20 border-t border-[#DBD5C7] pt-12">
+          <div className="flex gap-8 border-b border-[#DBD5C7] mb-8 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+            {["description", "dimensions", "materials", "shipping"].map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className="text-[10px] font-medium tracking-widest uppercase pb-4 border-b-2 transition-all duration-200 capitalize shrink-0"
+                style={{
+                  borderColor: tab === t ? "#A67C3D" : "transparent",
+                  color: tab === t ? "#1A1815" : "#8A8377",
+                }}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+
+          <div className="max-w-2xl">
+            {tab === "description" && (
+              <div className="space-y-4">
+                <p className="text-[15px] text-[#4A463F] leading-relaxed">{product.description}</p>
+                <p className="text-[15px] text-[#4A463F] leading-relaxed">
+                  Thoughtful proportions, durable finishes, and carefully selected glass, metal, linen, and wood give each piece its distinctive character.
+                </p>
+              </div>
+            )}
+            {tab === "dimensions" && (
+              <div>
+                {dimensionRows.map(([k, v]) => (
+                  <div key={k} className="flex items-center justify-between py-3.5 border-b border-[#DBD5C7]">
+                    <span className="text-[12px] text-[#8A8377] font-medium">{k}</span>
+                    <span className="text-[13px] text-[#1A1815]" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {tab === "materials" && (
+              <div>
+                {materialRows.map(([k, v]) => (
+                  <div key={k} className="py-3.5 border-b border-[#DBD5C7]">
+                    <p className="text-[10px] font-medium tracking-widest uppercase text-[#8A8377] mb-1">{k}</p>
+                    <p className="text-[13px] text-[#4A463F]">{v}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {tab === "shipping" && (
+              <div className="space-y-5">
+                <p className="text-[14px] text-[#4A463F] leading-relaxed">
+                  Complimentary standard delivery on orders over ৳15,000. Lamps and mirrors are packed carefully for a safe arrival.
+                </p>
+                <p className="text-[14px] text-[#4A463F] leading-relaxed">
+                  In-stock pieces usually dispatch within 2–4 business days. Returns are accepted within 30 days of delivery.
+                </p>
+                {product.orderType === "made-to-order" && (
+                  <div className="bg-[#F1E6CF] rounded-[4px] p-4">
+                    <p className="text-[12px] font-semibold text-[#B07C2E] mb-1">Ready to ship · {product.leadTime} lead time</p>
+                    <p className="text-[12px] text-[#8A6020]">Pay 30% now, balance on delivery confirmation.</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Related */}
+        <div className="mt-20">
+          <h2
+            className="text-[26px] font-light text-[#1A1815] mb-10"
+            style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.01em" }}
+          >
+            You may also like
+          </h2>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-10">
+            {[...PRODUCTS.filter((p) => p.id !== product.id && p.category === product.category), ...PRODUCTS.filter((p) => p.id !== product.id && p.category !== product.category)]
+              .slice(0, 4)
+              .map((p) => (
+                <ProductCard key={p.id} product={p} />
+              ))}
+          </div>
+        </div>
+      </div>
+
+      <PreFooterCTA />
+      <Footer />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECKOUT PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CheckoutPage() {
+  const { cart, cartSubtotal, navigate } = useApp();
+  const [done, setDone] = useState(false);
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const orderId = useRef("MN-" + Math.floor(Math.random() * 90000 + 10000));
+
+  if (done) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-8 text-center">
+        <div className="max-w-md">
+          <div className="w-16 h-16 bg-[#E7EADD] rounded-full flex items-center justify-center mx-auto mb-6">
+            <Check size={26} className="text-[#6F7D5E]" />
+          </div>
+          <h1 className="text-[30px] font-light text-[#1A1815] mb-3" style={{ fontFamily: "'Fraunces', serif" }}>
+            Order confirmed
+          </h1>
+          <p className="text-[13px] text-[#8A8377] mb-2" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+            {orderId.current}
+          </p>
+          <p className="text-[14px] text-[#4A463F] mb-8 leading-relaxed">
+            Thank you{name ? `, ${name}` : ""}. We'll send your order details by email.
+          </p>
+          <button
+            onClick={() => navigate("home")}
+            className="inline-flex items-center gap-2 bg-[#1A1815] text-[#F6F3EC] text-[11px] font-medium tracking-widest uppercase px-7 py-3.5 rounded-[4px] hover:bg-[#2E2A24] transition-colors"
+          >
+            Continue shopping
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen max-w-[900px] mx-auto px-8 py-12">
+      <h1 className="text-[30px] font-light text-[#1A1815] mb-10" style={{ fontFamily: "'Fraunces', serif" }}>
+        Checkout
+      </h1>
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-12">
+        <div className="lg:col-span-3 space-y-6">
+          {[
+            { label: "Contact", inputs: [{ placeholder: "Email address", val: email, set: setEmail, type: "email" }] },
+            { label: "Delivery", inputs: [{ placeholder: "Full name", val: name, set: setName, type: "text" }, { placeholder: "Delivery address", val: "", set: () => {}, type: "text" }] },
+          ].map(({ label, inputs }) => (
+            <div key={label}>
+              <p className="text-[10px] font-medium tracking-widest uppercase text-[#4A463F] mb-4">{label}</p>
+              <div className="space-y-3">
+                {inputs.map((inp) => (
+                  <input
+                    key={inp.placeholder}
+                    type={inp.type}
+                    placeholder={inp.placeholder}
+                    value={inp.val}
+                    onChange={(e) => inp.set(e.target.value)}
+                    className="w-full bg-[#FBF9F4] border border-[#DBD5C7] rounded-[4px] px-4 py-3 text-[14px] text-[#1A1815] placeholder-[#8A8377] focus:outline-none focus:border-[#A67C3D] transition-colors"
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+
+          <div>
+            <p className="text-[10px] font-medium tracking-widest uppercase text-[#4A463F] mb-4">Payment</p>
+            <div className="border border-[#DBD5C7] rounded-[4px] p-4 bg-[#FBF9F4]">
+              <p className="text-[13px] text-[#8A8377]">Demo mode — no real payment required</p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setDone(true)}
+            className="w-full bg-[#1A1815] text-[#F6F3EC] text-[11px] font-medium tracking-widest uppercase py-4 rounded-[4px] hover:bg-[#2E2A24] transition-colors flex items-center justify-center gap-2"
+          >
+            Place order — {formatPrice(cartSubtotal)} <ArrowRight size={13} />
+          </button>
+        </div>
+
+        <div className="lg:col-span-2">
+          <p className="text-[10px] font-medium tracking-widest uppercase text-[#4A463F] mb-5">Order summary</p>
+          <div className="space-y-4 mb-6">
+            {cart.map((item) => (
+              <div key={item.id} className="flex gap-3">
+                <div className="w-14 h-16 rounded-[4px] overflow-hidden bg-[#EFEBE1] shrink-0">
+                  <img src={item.product.images.silo} alt="" className="w-full h-full object-cover" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-[12px] font-semibold text-[#1A1815] leading-snug">{item.product.name}</p>
+                  {item.selectedColor && <p className="text-[11px] text-[#8A8377]">{item.selectedColor}</p>}
+                  <p className="text-[12px] text-[#1A1815] mt-1">{formatPrice(item.price * item.quantity)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="border-t border-[#DBD5C7] pt-4 space-y-2">
+            <div className="flex justify-between text-[14px]">
+              <span className="text-[#4A463F]">Subtotal</span>
+              <span className="font-medium text-[#1A1815]">{formatPrice(cartSubtotal)}</span>
+            </div>
+            <div className="flex justify-between text-[13px]">
+              <span className="text-[#8A8377]">Delivery</span>
+              <span className="text-[#6F7D5E] font-medium">Free</span>
+            </div>
+            <div className="flex justify-between text-[15px] font-semibold pt-2 border-t border-[#DBD5C7]">
+              <span className="text-[#1A1815]">Total</span>
+              <span className="text-[#1A1815]">{formatPrice(cartSubtotal)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CUSTOM PRODUCT REQUEST
+// -----------------------------------------------------------------------------
+type RequestValues = Record<string, string>;
+type RequestControlProps = {
+  label: string;
+  name: string;
+  value: string;
+  onChange: (name: string, value: string) => void;
+  options?: string[];
+  placeholder?: string;
+  type?: string;
+  min?: string;
+  error?: string;
+};
+
+function RequestControl({ label, name, value, onChange, options, placeholder, type = "text", min, error }: RequestControlProps) {
+  const controlClass = `w-full rounded-md border bg-white px-3.5 py-3 text-sm text-[#1A1815] outline-none transition focus:border-[#A67C3D] focus:ring-2 focus:ring-[#A67C3D]/15 ${error ? "border-[#B4593F]" : "border-[#DBD5C7]"}`;
+  return (
+    <label className="block min-w-0">
+      <span className="mb-2 block text-[12px] font-medium text-[#3A3530]">{label}</span>
+      {options ? (
+        <select value={value} onChange={(event) => onChange(name, event.target.value)} className={controlClass}>
+          <option value="">Select {label.toLowerCase()}</option>
+          {options.map((option) => <option key={option} value={option}>{option}</option>)}
+        </select>
+      ) : (
+        <input type={type} min={min} value={value} onChange={(event) => onChange(name, event.target.value)} placeholder={placeholder} className={controlClass} />
+      )}
+      {error && <span className="mt-1 block text-[11px] text-[#B4593F]">{error}</span>}
+    </label>
+  );
+}
+
+function RequestTextarea({ label, name, value, onChange, placeholder, maxLength, error }: RequestControlProps & { maxLength?: number }) {
+  return (
+    <label className="block min-w-0">
+      <span className="mb-2 block text-[12px] font-medium text-[#3A3530]">{label}</span>
+      <textarea value={value} onChange={(event) => onChange(name, event.target.value)} placeholder={placeholder} maxLength={maxLength} rows={4} className={`w-full resize-y rounded-md border bg-white px-3.5 py-3 text-sm text-[#1A1815] outline-none transition placeholder:text-[#A29A8B] focus:border-[#A67C3D] focus:ring-2 focus:ring-[#A67C3D]/15 ${error ? "border-[#B4593F]" : "border-[#DBD5C7]"}`} />
+      {error && <span className="mt-1 block text-[11px] text-[#B4593F]">{error}</span>}
+    </label>
+  );
+}
+
+function RequestSection({ number, title, description, children }: { number: string; title: string; description?: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-xl border border-[#E3DDD1] bg-white p-5 shadow-[0_8px_24px_-24px_rgba(26,24,21,0.3)] sm:p-7">
+      <div className="mb-5 flex items-start gap-3 border-b border-[#EEE9E0] pb-4">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#F2E9D9] text-[10px] font-semibold text-[#946E35]">{number}</span>
+        <div>
+          <h2 className="text-base font-medium text-[#1A1815]">{title}</h2>
+          {description && <p className="mt-1 text-xs leading-relaxed text-[#8A8377]">{description}</p>}
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function CustomProductRequest() {
+  const { navigate } = useApp();
+  const [values, setValues] = useState<RequestValues>({ quantity: "1", unit: "Inches" });
+  const [errors, setErrors] = useState<RequestValues>({});
+  const [images, setImages] = useState<{ file: File; url: string }[]>([]);
+  const [imageError, setImageError] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const imageUrls = useRef<string[]>([]);
+  const setValue = (name: string, value: string) => setValues((current) => ({ ...current, [name]: value }));
+
+  useEffect(() => () => imageUrls.current.forEach((url) => URL.revokeObjectURL(url)), []);
+
+  const addImages = (list: FileList | null) => {
+    if (!list) return;
+    const picked = Array.from(list);
+    const valid = picked.filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type));
+    if (valid.length !== picked.length) setImageError("Please choose JPG, PNG, or WEBP images.");
+    else setImageError("");
+    if (images.length + valid.length > 4) setImageError("You can upload a maximum of 4 images.");
+    const allowed = valid.slice(0, Math.max(0, 4 - images.length));
+    const previews = allowed.map((file) => {
+      const url = URL.createObjectURL(file);
+      imageUrls.current.push(url);
+      return { file, url };
+    });
+    if (previews.length) setImages((current) => [...current, ...previews]);
+    if (fileInput.current) fileInput.current.value = "";
+  };
+
+  const removeImage = (index: number) => {
+    setImages((current) => {
+      const removed = current[index];
+      if (removed) URL.revokeObjectURL(removed.url);
+      return current.filter((_, itemIndex) => itemIndex !== index);
+    });
+    setImageError("");
+  };
+
+  const submitRequest = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextErrors: RequestValues = {};
+    ["fullName", "phone", "address", "city", "productType", "quantity", "materialType"].forEach((field) => {
+      if (!values[field]?.trim()) nextErrors[field] = "This field is required.";
+    });
+    if (values.phone && !/^[+\d][\d\s().-]{6,18}$/.test(values.phone.trim())) nextErrors.phone = "Enter a valid phone number.";
+    if (values.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email.trim())) nextErrors.email = "Enter a valid email address.";
+    if (Number(values.quantity) < 1 || !Number.isFinite(Number(values.quantity))) nextErrors.quantity = "Quantity must be at least 1.";
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) {
+      document.getElementById(Object.keys(nextErrors)[0])?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    setSubmitting(true);
+    // This project has no request API configured yet. Keep a clean structured
+    // payload in memory for the success state without pretending it was sent.
+    const requestPayload = {
+      customer: { fullName: values.fullName, phone: values.phone, email: values.email || "", address: values.address, cityArea: values.city },
+      product: { type: values.productType, model: values.productName || "", quantity: Number(values.quantity) },
+      material: { type: values.materialType, wood: { type: values.woodType || "", color: values.woodColor || "", customColor: values.woodCustomColor || "", finish: values.woodFinish || "" }, metal: { type: values.metalType || "", color: values.metalColor || "", customColor: values.metalCustomColor || "", finish: values.metalFinish || "" }, other: values.otherMaterial || "" },
+      dimensions: { length: values.length || "", width: values.width || "", height: values.height || "", diameter: values.diameter || "", unit: values.unit, details: values.dimensionDetails || "" },
+      customization: Object.fromEntries(Object.entries(values).filter(([key]) => ["lampType", "lampColor", "shadeShape", "shadeColor", "bulbType", "lampRequirements", "shadeMaterial", "shadePattern", "shadeRequirements", "mirrorShape", "frameColor", "frameFinish", "mirrorStyle", "mirrorRequirements", "tableType", "tableColor", "tableFinish", "legStyle", "tableRequirements", "otherProductDetails"].includes(key))),
+      references: { imageNames: images.map(({ file }) => file.name), instructions: values.referenceInstructions || "" },
+      additional: { installation: values.installation || "", delivery: values.delivery || "", notes: values.additionalNotes || "" },
+    };
+    void requestPayload;
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    setSubmitting(false);
+    setSubmitted(true);
+  };
+
+  const hasWood = values.materialType === "Wood" || values.materialType === "Wood + Metal";
+  const hasMetal = values.materialType === "Metal" || values.materialType === "Wood + Metal";
+  const input = (label: string, name: string, options?: string[], placeholder?: string, type?: string, min?: string) => <RequestControl label={label} name={name} value={values[name] || ""} onChange={setValue} options={options} placeholder={placeholder} type={type} min={min} error={errors[name]} />;
+  const textarea = (label: string, name: string, placeholder: string, maxLength?: number) => <RequestTextarea label={label} name={name} value={values[name] || ""} onChange={setValue} placeholder={placeholder} maxLength={maxLength} error={errors[name]} />;
+  const woodFields = <div className="grid gap-4 sm:grid-cols-2">{input("Wood Type", "woodType", ["Oak", "Walnut", "Teak", "Mahogany", "Pine", "MDF", "Plywood", "Other"])}{input("Wood Color", "woodColor", ["Natural", "Light Wood", "Medium Wood", "Dark Wood", "Walnut", "Custom Color"])}{values.woodColor === "Custom Color" && input("Custom Wood Color", "woodCustomColor", undefined, "Describe your preferred wood color")}{input("Wood Finish", "woodFinish", ["Matte", "Glossy", "Natural", "Semi-Gloss", "Other"])}</div>;
+  const metalFields = <div className="grid gap-4 sm:grid-cols-2">{input("Metal Type", "metalType", ["Mild Steel", "Stainless Steel", "Iron", "Aluminum", "Brass", "Copper", "Other"])}{input("Metal Color / Finish", "metalColor", ["Black", "White", "Gold", "Silver", "Brass", "Copper", "Bronze", "Custom Color"])}{values.metalColor === "Custom Color" && input("Custom Metal Color", "metalCustomColor", undefined, "Describe your preferred metal color")}{input("Metal Finish", "metalFinish", ["Matte", "Glossy", "Brushed", "Polished", "Antique", "Textured", "Other"])}</div>;
+
+  if (submitted) return (
+    <div className="min-h-[65vh] bg-[#F6F3EC] px-5 py-16">
+      <div className="mx-auto max-w-2xl rounded-xl border border-[#DBD5C7] bg-white p-8 text-center shadow-sm sm:p-12">
+        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-[#E7EADD] text-2xl text-[#6F7D5E]">?</div>
+        <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-[#A67C3D]">Request prepared</p>
+        <h1 className="mb-4 text-2xl font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>Thank you for sharing your idea.</h1>
+        <p className="text-sm leading-relaxed text-[#6D675D]">Your custom product request has been prepared. This website is not connected to a request inbox yet, so your information has not been sent to our team.</p>
+        <button onClick={() => navigate("home")} className="mt-7 rounded-md bg-[#1A1815] px-6 py-3 text-[11px] font-medium uppercase tracking-widest text-white">Back to home</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-[#F6F3EC] px-4 py-10 sm:px-6 sm:py-14">
+      <div className="mx-auto max-w-5xl">
+        <div className="mb-8 text-center sm:mb-10">
+          <button onClick={() => navigate("home")} className="mb-5 text-[10px] font-medium uppercase tracking-widest text-[#8A8377] hover:text-[#A67C3D]">? Back to home</button>
+          <p className="mb-3 text-[10px] font-medium uppercase tracking-[0.2em] text-[#A67C3D]">Made around your idea</p>
+          <h1 className="text-3xl font-light text-[#1A1815] sm:text-4xl" style={{ fontFamily: "'Fraunces', serif" }}>Custom Product Request</h1>
+          <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-[#746D62]">Tell us what you would like us to create. Share the details you know and leave the rest blank.</p>
+        </div>
+
+        <form noValidate onSubmit={submitRequest} className="space-y-5">
+          <RequestSection number="01" title="Customer Information" description="How can our team reach you about your custom piece?">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div id="fullName">{input("Full Name *", "fullName", undefined, "Enter your full name")}</div>
+              <div id="phone">{input("Phone Number *", "phone", undefined, "Enter your phone number", "tel")}</div>
+              <div id="email">{input("Email Address", "email", undefined, "Enter your email address", "email")}</div>
+              <div id="city">{input("City / Area *", "city", undefined, "Enter your city or area")}</div>
+              <div className="sm:col-span-2" id="address">{textarea("Delivery Address *", "address", "Enter your complete delivery address")}</div>
+            </div>
+          </RequestSection>
+
+          <RequestSection number="02" title="Product Information" description="Choose the kind of piece you have in mind.">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div id="productType">{input("Product Type *", "productType", ["Lamp", "Mirror", "Table", "Lamp Shade", "Other"])}</div>
+              <div>{input("Product Name / Model", "productName", undefined, "Enter product name or model if applicable")}</div>
+              <div id="quantity">{input("Quantity *", "quantity", undefined, "1", "number", "1")}</div>
+            </div>
+          </RequestSection>
+
+          <RequestSection number="03" title="Material Selection" description="Select the main material. Add details below for each selected material.">
+            <div id="materialType" className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {["Wood", "Metal", "Wood + Metal", "Other"].map((material) => (
+                <label key={material} className={`flex min-h-14 cursor-pointer items-center justify-center rounded-lg border px-3 text-center text-xs font-medium transition ${values.materialType === material ? "border-[#A67C3D] bg-[#F5EFE4] text-[#785A2E] ring-1 ring-[#A67C3D]" : "border-[#DBD5C7] bg-white text-[#4A463F] hover:border-[#A67C3D]/60"}`}>
+                  <input type="radio" name="materialType" value={material} checked={values.materialType === material} onChange={(event) => setValue("materialType", event.target.value)} className="sr-only" />{material.toUpperCase()}
+                </label>
+              ))}
+            </div>
+            {errors.materialType && <p className="mt-2 text-[11px] text-[#B4593F]">{errors.materialType}</p>}
+            <div className="mt-5 space-y-5">
+              {hasWood && <div className="rounded-lg bg-[#FBF9F4] p-4"><h3 className="mb-4 text-xs font-semibold uppercase tracking-wider text-[#6B4B32]">Wood details</h3>{woodFields}</div>}
+              {hasMetal && <div className="rounded-lg bg-[#FBF9F4] p-4"><h3 className="mb-4 text-xs font-semibold uppercase tracking-wider text-[#6B4B32]">Metal details</h3>{metalFields}</div>}
+              {values.materialType === "Other" && <div>{textarea("Material Details", "otherMaterial", "Please describe the material you want")}</div>}
+            </div>
+          </RequestSection>
+
+          <RequestSection number="04" title="Size & Dimensions" description="All measurements are optional. Choose one unit for the dimensions you provide.">
+            <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">{input("Length", "length", undefined, "e.g. 48", "number", "0")}{input("Width", "width", undefined, "e.g. 24", "number", "0")}{input("Height", "height", undefined, "e.g. 30", "number", "0")}{input("Diameter", "diameter", undefined, "e.g. 18", "number", "0")}{input("Unit", "unit", ["Inches", "Centimeters", "Feet", "Millimeters"])}</div>
+            <div className="mt-4">{textarea("Additional Dimension Details", "dimensionDetails", "Describe any special size or dimension requirements...")}</div>
+            <p className="mt-2 text-[11px] text-[#8A8377]">Example: 48 inches long, 24 inches wide, and 30 inches high.</p>
+          </RequestSection>
+
+          <RequestSection number="05" title="Product Customization" description="Only the options for your selected product type are shown.">
+            {!values.productType && <p className="text-sm text-[#8A8377]">Select a product type above to see the matching customization options.</p>}
+            {values.productType === "Lamp" && <div className="grid gap-4 sm:grid-cols-2">{input("Lamp Type", "lampType", ["Table Lamp", "Floor Lamp", "Pendant Lamp", "Wall Lamp", "Other"])}{input("Lamp Color", "lampColor", undefined, "Describe preferred lamp color")}{input("Shade Shape", "shadeShape", ["Round", "Square", "Rectangular", "Cylindrical", "Cone", "Custom"])}{input("Shade Color", "shadeColor", undefined, "Describe preferred shade color")}{input("Bulb Type", "bulbType", ["LED", "Warm White", "Cool White", "Other"])}<div className="sm:col-span-2">{textarea("Additional Lamp Requirements", "lampRequirements", "Tell us about any other lamp details...")}</div></div>}
+            {values.productType === "Lamp Shade" && <div className="grid gap-4 sm:grid-cols-2">{input("Shade Shape", "shadeShape", ["Round", "Square", "Rectangular", "Cylindrical", "Cone", "Custom"])}{input("Shade Material", "shadeMaterial", ["Fabric", "Cotton", "Linen", "Polyester", "Paper", "Metal", "Other"])}{input("Shade Color", "shadeColor", undefined, "Describe preferred shade color")}{input("Shade Pattern", "shadePattern", undefined, "Describe a pattern or motif")}{<div className="sm:col-span-2">{textarea("Additional Shade Requirements", "shadeRequirements", "Tell us about any other shade details...")}</div>}</div>}
+            {values.productType === "Mirror" && <div className="grid gap-4 sm:grid-cols-2">{input("Mirror Shape", "mirrorShape", ["Round", "Square", "Rectangle", "Oval", "Arch", "Custom"])}{input("Frame Color", "frameColor", undefined, "Describe preferred frame color")}{input("Frame Finish", "frameFinish", ["Matte", "Glossy", "Natural", "Polished", "Antique", "Other"])}{input("Mirror Style", "mirrorStyle", ["Minimal", "Modern", "Classic", "Decorative", "Industrial", "Custom"])}<div className="sm:col-span-2">{textarea("Additional Mirror Requirements", "mirrorRequirements", "Tell us about any other mirror details...")}</div></div>}
+            {values.productType === "Table" && <div className="grid gap-4 sm:grid-cols-2">{input("Table Type", "tableType", ["Coffee Table", "Side Table", "Dining Table", "Console Table", "Bedside Table", "Study Table", "Other"])}{input("Table Color", "tableColor", undefined, "Describe preferred table color")}{input("Finish", "tableFinish", ["Matte", "Glossy", "Natural", "Polished", "Other"])}{input("Leg Style", "legStyle", ["Straight", "Tapered", "Round", "Cross", "Hairpin", "Custom"])}<div className="sm:col-span-2">{textarea("Additional Table Requirements", "tableRequirements", "Tell us about any other table details...")}</div></div>}
+            {values.productType === "Other" && textarea("Product Details", "otherProductDetails", "Describe the product you would like us to make...")}
+          </RequestSection>
+
+          <RequestSection number="06" title="Reference Photos" description="Upload photos of the design, product, material, color, or style you want us to use as a reference.">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {images.map((image, index) => <div key={image.url} className="group relative aspect-square overflow-hidden rounded-lg border border-[#DBD5C7] bg-[#F6F3EC]"><img src={image.url} alt={`Reference ${index + 1}`} className="h-full w-full object-cover" /><button type="button" onClick={() => removeImage(index)} aria-label={`Remove reference image ${index + 1}`} className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-lg text-[#5D342B] shadow">×</button></div>)}
+              {images.length < 4 && <button type="button" onClick={() => fileInput.current?.click()} className="flex aspect-square flex-col items-center justify-center rounded-lg border border-dashed border-[#B9B1A0] bg-[#FBF9F4] text-center text-[#6D675D] transition hover:border-[#A67C3D] hover:bg-[#F5EFE4]"><span className="mb-2 text-3xl font-light text-[#A67C3D]">+</span><span className="text-xs font-medium">Upload Photo</span><span className="mt-1 text-[10px]">JPG, PNG, WEBP</span></button>}
+            </div>
+            <input ref={fileInput} type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple className="hidden" onChange={(event) => addImages(event.target.files)} />
+            <p className="mt-3 text-[11px] text-[#8A8377]">Maximum 4 images. Photos are optional.</p>
+            {imageError && <p role="alert" className="mt-2 text-xs text-[#B4593F]">{imageError}</p>}
+          </RequestSection>
+
+          <RequestSection number="07" title="Reference Instructions" description="Tell us what to follow, change, or keep from your reference.">
+            {textarea("Reference Instructions", "referenceInstructions", "Tell us anything else about the product you want... Example: I want the same design as the reference image, but in dark walnut color.", 2000)}
+            <p className="mt-2 text-right text-[11px] text-[#8A8377]">{(values.referenceInstructions || "").length} / 2000</p>
+          </RequestSection>
+
+          <RequestSection number="08" title="Additional Requirements">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <fieldset><legend className="mb-2 text-[12px] font-medium text-[#3A3530]">Installation Required?</legend><div className="flex flex-wrap gap-4">{["Yes", "No", "Not Sure"].map((option) => <label key={option} className="flex items-center gap-2 text-sm text-[#4A463F]"><input type="radio" name="installation" checked={values.installation === option} onChange={() => setValue("installation", option)} className="accent-[#A67C3D]" />{option}</label>)}</div></fieldset>
+              {input("Delivery Preference", "delivery", ["Standard Delivery", "Need Delivery Consultation", "Other"])}
+              <div className="sm:col-span-2">{textarea("Additional Notes", "additionalNotes", "Anything else we should know?")}</div>
+            </div>
+          </RequestSection>
+
+          <div className="rounded-xl border border-[#E3DDD1] bg-white p-5 text-center sm:p-7">
+            <p className="mb-4 text-xs leading-relaxed text-[#8A8377]">Our team will review your specifications and confirm design, pricing, and delivery details.</p>
+            <button type="submit" disabled={submitting} className="inline-flex min-h-12 w-full items-center justify-center rounded-md bg-[#1A1815] px-8 py-3.5 text-[11px] font-medium uppercase tracking-[0.16em] text-white transition hover:bg-[#39342D] disabled:cursor-wait disabled:opacity-60 sm:w-auto">
+              {submitting ? "Preparing your request..." : "Request Custom Quote"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+function MessengerChatButton() {
+  return (
+    <button type="button" aria-label="Chat with us on Facebook Messenger" title="Chat with us on Messenger" className="fixed bottom-20 right-5 z-[300] flex h-14 w-14 items-center justify-center rounded-full bg-[#0866FF] text-white shadow-[0_8px_24px_rgba(8,102,255,0.38)] transition hover:scale-105 hover:bg-[#0759DF] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#0866FF]/30 md:bottom-6 md:right-6">
+      <svg viewBox="0 0 32 32" className="h-8 w-8" aria-hidden="true">
+        <path fill="currentColor" d="M16 4.2C9.05 4.2 3.4 9.25 3.4 15.48c0 3.3 1.55 6.26 4.1 8.2v4.1l3.78-2.08c1.45.43 3.03.66 4.72.66 6.95 0 12.6-5.05 12.6-11.28S22.95 4.2 16 4.2Zm1.46 14.96-3.15-3.35-6.13 3.35 6.8-7.25 3.2 3.35 6.1-3.35-6.82 7.25Z" />
+      </svg>
+    </button>
+  );
+}
+// APP ROOT
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEARCH OVERLAY
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SearchOverlay() {
+  const { searchOpen, closeSearch, navigate } = useApp();
+  const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (searchOpen) {
+      setQuery("");
+      setTimeout(() => inputRef.current?.focus(), 80);
+    }
+  }, [searchOpen]);
+
+  useEffect(() => {
+    const fn = (e: KeyboardEvent) => { if (e.key === "Escape") closeSearch(); };
+    document.addEventListener("keydown", fn);
+    return () => document.removeEventListener("keydown", fn);
+  }, [closeSearch]);
+
+  const results = query.trim().length >= 1
+    ? PRODUCTS.filter((p) => {
+        const q = query.toLowerCase();
+        return (
+          p.name.toLowerCase().includes(q) ||
+          p.category.toLowerCase().includes(q) ||
+          p.subcategory.toLowerCase().includes(q) ||
+          p.description.toLowerCase().includes(q)
+        );
+      }).slice(0, 6)
+    : [];
+
+  const popular = ["Table lamps", "Pendant lights", "Wall mirrors", "Lamp shades", "Side tables"];
+
+  return (
+    <>
+      {/* Scrim */}
+      <div
+        className="fixed inset-0 z-[150] bg-black/40 transition-opacity duration-300"
+        style={{ opacity: searchOpen ? 1 : 0, pointerEvents: searchOpen ? "auto" : "none" }}
+        onClick={closeSearch}
+      />
+
+      {/* Panel — drops from under the header */}
+      <div
+        className="fixed inset-x-0 z-[151] bg-[#FBF9F4] shadow-xl border-b border-[#DBD5C7] transition-all duration-300 overflow-hidden"
+        style={{
+          top: 0,
+          paddingTop: 104,
+          maxHeight: searchOpen ? 560 : 0,
+          opacity: searchOpen ? 1 : 0,
+          pointerEvents: searchOpen ? "auto" : "none",
+        }}
+      >
+        <div className="max-w-[720px] mx-auto px-8 pb-10">
+          {/* Input */}
+          <div className="relative mb-8 flex items-center gap-4 border-b-2 border-[#DBD5C7] focus-within:border-[#A67C3D] transition-colors pb-3">
+            <Search size={20} className="text-[#8A8377] shrink-0" strokeWidth={1.5} />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search pieces, materials, styles…"
+              className="flex-1 bg-transparent text-[#1A1815] text-[20px] font-light focus:outline-none placeholder-[#B9B1A0]"
+              style={{ fontFamily: "'Fraunces', serif" }}
+            />
+            {query && (
+              <button onClick={() => setQuery("")} className="text-[#8A8377] hover:text-[#1A1815] transition-colors">
+                <X size={16} />
+              </button>
+            )}
+          </div>
+
+          {/* Results */}
+          {results.length > 0 ? (
+            <div>
+              <p className="text-[10px] font-medium tracking-widest uppercase text-[#8A8377] mb-3">Products</p>
+              <div className="divide-y divide-[#F0EBE1]">
+                {results.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => { closeSearch(); navigate("product", { id: p.id }); }}
+                    className="w-full flex items-center gap-4 py-3 hover:bg-[#EFEBE1] px-3 -mx-3 rounded-lg transition-colors text-left group"
+                  >
+                    <div className="w-11 h-13 rounded-[6px] overflow-hidden bg-[#EFEBE1] shrink-0" style={{ height: 52 }}>
+                      <img src={p.images.silo} alt={p.name} className="w-full h-full object-cover" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[13px] font-semibold text-[#1A1815] truncate">{p.name}</p>
+                      <p className="text-[11px] text-[#8A8377]">{p.subcategory} · {p.category}</p>
+                    </div>
+                    <span className="text-[13px] font-medium text-[#1A1815] shrink-0" style={{ fontVariantNumeric: "tabular-nums" }}>
+                      {formatPrice(p.salePrice ?? p.basePrice)}
+                    </span>
+                    <ChevronRight size={13} className="text-[#DBD5C7] group-hover:text-[#A67C3D] transition-colors shrink-0" />
+                  </button>
+                ))}
+              </div>
+              {results.length === 6 && (
+                <button
+                  onClick={() => { closeSearch(); navigate("listing"); }}
+                  className="mt-4 text-[10px] font-medium tracking-widest uppercase text-[#A67C3D] flex items-center gap-1.5 hover:text-[#6B4B32] transition-colors"
+                >
+                  See all results <ArrowRight size={11} />
+                </button>
+              )}
+            </div>
+          ) : query.trim() ? (
+            <p className="text-[14px] text-[#8A8377] text-center py-8">No results for "{query}" — try a different term.</p>
+          ) : (
+            <div className="grid grid-cols-2 gap-10">
+              <div>
+                <p className="text-[10px] font-medium tracking-widest uppercase text-[#8A8377] mb-4">Popular searches</p>
+                <ul className="space-y-2.5">
+                  {popular.map((s) => (
+                    <li key={s}>
+                      <button
+                        onClick={() => setQuery(s)}
+                        className="flex items-center gap-2.5 text-[13px] text-[#4A463F] hover:text-[#A67C3D] transition-colors group"
+                      >
+                        <Search size={12} className="text-[#DBD5C7] group-hover:text-[#A67C3D] transition-colors" />
+                        {s}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className="text-[10px] font-medium tracking-widest uppercase text-[#8A8377] mb-4">Browse categories</p>
+                <ul className="space-y-2.5">
+                  {CATEGORIES.slice(0, 5).map((c) => (
+                    <li key={c.slug}>
+                      <button
+                        onClick={() => { closeSearch(); navigate("listing", { category: c.slug }); }}
+                        className="flex items-center gap-2.5 text-[13px] text-[#4A463F] hover:text-[#A67C3D] transition-colors group"
+                      >
+                        <ChevronRight size={12} className="text-[#DBD5C7] group-hover:text-[#A67C3D] transition-colors" />
+                        {c.name}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WISHLIST PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+
+function WishlistPage() {
+  const { wishlist, toggleWishlist, addToCart, navigate } = useApp();
+  const items = PRODUCTS.filter((p) => wishlist.includes(p.id));
+
+  return (
+    <div className="min-h-screen">
+      {/* Page header */}
+      <div className="max-w-[1800px] mx-auto px-8 py-10 border-b border-[#DBD5C7]">
+        <div className="flex items-center gap-2 text-[11px] text-[#8A8377] mb-4">
+          <button onClick={() => navigate("home")} className="hover:text-[#1A1815] transition-colors">Home</button>
+          <span>/</span>
+          <span className="text-[#4A463F]">Saved pieces</span>
+        </div>
+        <div className="flex items-end justify-between">
+          <h1 className="text-[38px] md:text-[44px] font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.01em" }}>
+            Saved pieces
+          </h1>
+          {items.length > 0 && (
+            <p className="text-[13px] text-[#8A8377] mb-1.5">{items.length} {items.length === 1 ? "piece" : "pieces"}</p>
+          )}
+        </div>
+      </div>
+
+      <div className="max-w-[1800px] mx-auto px-8 py-12">
+        {items.length === 0 ? (
+          /* Empty state */
+          <div className="py-28 text-center">
+            <div className="w-20 h-20 rounded-full bg-[#EFEBE1] flex items-center justify-center mx-auto mb-6">
+              <Heart size={28} strokeWidth={1} className="text-[#B9B1A0]" />
+            </div>
+            <h2 className="text-[24px] font-light text-[#1A1815] mb-3" style={{ fontFamily: "'Fraunces', serif" }}>
+              No saved pieces yet
+            </h2>
+            <p className="text-[14px] text-[#8A8377] mb-8 max-w-xs mx-auto leading-relaxed">
+              Tap the heart on any product to save it here for when you're ready.
+            </p>
+            <button
+              onClick={() => navigate("listing")}
+              className="inline-flex items-center gap-2 bg-[#1A1815] text-[#F6F3EC] text-[11px] font-medium tracking-widest uppercase px-7 py-3.5 rounded-[4px] hover:bg-[#2E2A24] transition-colors"
+            >
+              Explore collection <ArrowRight size={13} />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-5 gap-y-10">
+              {items.map((product) => {
+                const price = product.salePrice ?? product.basePrice;
+                return (
+                  <div key={product.id}>
+                    {/* Image */}
+                    <div
+                      className="relative overflow-hidden rounded-lg mb-4 cursor-pointer group"
+                      style={{ aspectRatio: "4/5", backgroundColor: "#EFEBE1" }}
+                      onClick={() => navigate("product", { id: product.id })}
+                    >
+                      <img
+                        src={product.images.silo}
+                        alt={product.name}
+                        onError={handleImgError}
+                        className="absolute inset-0 w-full h-full scale-[1.12] object-cover transition-transform duration-500 group-hover:scale-[1.16]"
+                      />
+                      {product.badge && (
+                        <div className="absolute top-3 left-3"><BadgeTag type={product.badge} /></div>
+                      )}
+                      {/* Remove heart */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleWishlist(product.id); }}
+                        aria-label="Remove from saved"
+                        className="absolute top-3 right-3 w-9 h-9 flex items-center justify-center rounded-full bg-white/85 backdrop-blur-sm hover:scale-110 transition-transform"
+                      >
+                        <Heart size={15} className="fill-[#B4593F] text-[#B4593F]" />
+                      </button>
+                    </div>
+
+                    {/* Info */}
+                    <p className="text-[10px] font-medium tracking-widest uppercase text-[#8A8377] mb-1">{product.subcategory}</p>
+                    <button
+                      onClick={() => navigate("product", { id: product.id })}
+                      className="block w-full text-left text-[14px] font-semibold text-[#1A1815] mb-1 hover:text-[#A67C3D] transition-colors leading-snug"
+                    >
+                      {product.name}
+                    </button>
+                    {product.rating && (
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <Stars value={product.rating} />
+                        <span className="text-[11px] text-[#8A8377]">{product.rating} ({product.reviewCount})</span>
+                      </div>
+                    )}
+                    <div className="flex items-baseline gap-2 mb-3">
+                      <span className="text-[14px] font-medium text-[#1A1815]" style={{ fontVariantNumeric: "tabular-nums" }}>
+                        {formatPrice(price)}
+                      </span>
+                      {product.salePrice && (
+                        <span className="text-[12px] text-[#8A8377] line-through" style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {formatPrice(product.basePrice)}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => addToCart(product, { color: product.swatches[0]?.label })}
+                      className="w-full border border-[#1A1815] text-[#1A1815] text-[10px] font-medium tracking-widest uppercase py-2.5 rounded-[4px] hover:bg-[#1A1815] hover:text-[#F6F3EC] transition-colors"
+                    >
+                      Add to cart
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="border-t border-[#DBD5C7] mt-12 pt-8 text-center">
+              <button
+                onClick={() => navigate("listing")}
+                className="inline-flex items-center gap-2 text-[10px] font-medium tracking-widest uppercase text-[#4A463F] hover:text-[#A67C3D] transition-colors"
+              >
+                Continue browsing <ArrowRight size={11} />
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      <Footer />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APP ROOT
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MobileBottomNav() {
+  const { currentPage, wishlist, cartCount, navigate, openMiniCart, goBack } = useApp();
+  const [isIPhone, setIsIPhone] = useState(false);
+
+  useEffect(() => {
+    setIsIPhone(/iPhone|iPod/i.test(navigator.userAgent));
+  }, []);
+
+  const items = [
+    ...(isIPhone ? [{ label: "Back", icon: ArrowLeft, action: goBack, active: false }] : []),
+    { label: "Home", icon: Home, action: () => navigate("home"), active: currentPage.name === "home" },
+    { label: "Wishlist", icon: Heart, action: () => navigate("wishlist"), count: wishlist.length, active: currentPage.name === "wishlist" },
+    { label: "Cart", icon: ShoppingCart, action: openMiniCart, count: cartCount, active: currentPage.name === "cart" },
+    { label: "Profile", icon: User, action: () => {}, active: currentPage.name === "account" },
+  ];
+
+  return (
+    <nav aria-label="Mobile navigation" className={`mobile-bottom-nav fixed inset-x-0 bottom-0 z-[80] grid ${isIPhone ? "grid-cols-5" : "grid-cols-4"} border-t border-[#E4E4E4] bg-white px-1 md:hidden`}>
+      {items.map(({ label, icon: Icon, action, count, active }) => (
+        <button key={label} type="button" onClick={action} aria-label={label} aria-current={active ? "page" : undefined} className={`relative flex h-10 items-center justify-center text-[#171717] transition-colors ${active ? "" : "opacity-75 hover:opacity-100"}`}>
+          <Icon size={18} strokeWidth={active ? 2 : 1.7} />
+          {typeof count === "number" && <span className="absolute left-[calc(50%+8px)] top-[10px] text-[9px] leading-none text-[#171717]">{count}</span>}
+        </button>
+      ))}
+    </nav>
+  );
+}
+function AppInner() {
+  const { currentPage } = useApp();
+  const headerOffset = 92;
+
+  return (
+    <div className="min-h-screen bg-[#F6F3EC]">
+      <Header />
+      <SearchOverlay />
+      <main className={`mobile-nav-main ${currentPage.name === "home" ? "home-hero-main" : ""}`} style={{ paddingTop: headerOffset }}>
+        {currentPage.name === "home" && <HomePage />}
+        {currentPage.name === "custom-request" && <CustomProductRequest />}
+        {currentPage.name === "listing" && <ListingPage params={currentPage.params} />}
+        {currentPage.name === "product" && <ProductPage params={currentPage.params} />}
+        {currentPage.name === "checkout" && <CheckoutPage />}
+        {currentPage.name === "cart" && <ListingPage params={{ category: "all" }} />}
+        {currentPage.name === "wishlist" && <WishlistPage />}
+      </main>
+      <MiniCartDrawer />
+      <MessengerChatButton />
+      <MobileBottomNav />
+      <Toaster />
+    </div>
+  );
+}
+
+export default function App() {
+  const [loading, setLoading] = useState(true);
+
+  return (
+    <AppProvider>
+      {loading && <Preloader onComplete={() => setLoading(false)} />}
+      <AppInner />
+    </AppProvider>
+  );
+}
+
+
+
+
+
+
+
+
+
+

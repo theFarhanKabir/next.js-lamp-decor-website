@@ -1,0 +1,182 @@
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --font-size: 16px;
+
+  /* Maison palette mapped to Tailwind semantic tokens */
+  --background: #F6F3EC;
+  --foreground: #1A1815;
+  --card: #FBF9F4;
+  --card-foreground: #1A1815;
+  --popover: #FBF9F4;
+  --popover-foreground: #1A1815;
+  --primary: #1A1815;
+  --primary-foreground: #F6F3EC;
+  --secondary: #EFEBE1;
+  --secondary-foreground: #1A1815;
+  --muted: #EFEBE1;
+  --muted-foreground: #8A8377;
+  --accent: #EDE3D0;
+  --accent-foreground: #A67C3D;
+  --destructive: #B4593F;
+  --destructive-foreground: #F6F3EC;
+  --border: #DBD5C7;
+  --input: transparent;
+  --input-background: #FBF9F4;
+  --switch-background: #DBD5C7;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #A67C3D;
+  --radius: 4px;
+
+  /* Maison design tokens */
+  --paper: #F6F3EC;
+  --paper-raised: #FBF9F4;
+  --paper-sunken: #EFEBE1;
+  --ink: #1A1815;
+  --ink-soft: #4A463F;
+  --ink-muted: #8A8377;
+  --line: #DBD5C7;
+  --line-strong: #B9B1A0;
+  --brass: #A67C3D;
+  --brass-soft: #C9A362;
+  --brass-wash: #EDE3D0;
+  --sage: #6F7D5E;
+  --sage-wash: #E7EADD;
+  --clay: #B4593F;
+  --clay-wash: #F4E2DB;
+  --amber: #B07C2E;
+  --amber-wash: #F1E6CF;
+
+  --chart-1: #A67C3D;
+  --chart-2: #6F7D5E;
+  --chart-3: #B4593F;
+  --chart-4: #B07C2E;
+  --chart-5: #4A463F;
+
+  --sidebar: #FBF9F4;
+  --sidebar-foreground: #1A1815;
+  --sidebar-primary: #1A1815;
+  --sidebar-primary-foreground: #F6F3EC;
+  --sidebar-accent: #EFEBE1;
+  --sidebar-accent-foreground: #4A463F;
+  --sidebar-border: #DBD5C7;
+  --sidebar-ring: #A67C3D;
+}
+
+.dark {
+  --background: #1A1815;
+  --foreground: #F6F3EC;
+  --card: #252118;
+  --card-foreground: #F6F3EC;
+  --popover: #252118;
+  --popover-foreground: #F6F3EC;
+  --primary: #F6F3EC;
+  --primary-foreground: #1A1815;
+  --secondary: #2E2A24;
+  --secondary-foreground: #F6F3EC;
+  --muted: #2E2A24;
+  --muted-foreground: #8A8377;
+  --accent: #3A3020;
+  --accent-foreground: #C9A362;
+  --destructive: #B4593F;
+  --destructive-foreground: #F6F3EC;
+  --border: #3A3530;
+  --input: #2E2A24;
+  --ring: #A67C3D;
+  --sidebar: #252118;
+  --sidebar-foreground: #F6F3EC;
+  --sidebar-primary: #F6F3EC;
+  --sidebar-primary-foreground: #1A1815;
+  --sidebar-accent: #2E2A24;
+  --sidebar-accent-foreground: #F6F3EC;
+  --sidebar-border: #3A3530;
+  --sidebar-ring: #A67C3D;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 8px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+  }
+
+  html {
+    font-size: var(--font-size);
+  }
+
+  h1, h2, h3 {
+    font-family: 'Fraunces', Georgia, serif;
+    font-weight: 300;
+  }
+
+  h4 {
+    font-size: var(--text-base);
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  label {
+    font-size: var(--text-sm);
+    font-weight: 500;
+    line-height: 1.5;
+  }
+
+  button {
+    font-family: 'Inter', sans-serif;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    line-height: 1.5;
+  }
+
+  input, select, textarea {
+    font-family: 'Inter', sans-serif;
+    font-size: var(--text-sm);
+    font-weight: 400;
+    line-height: 1.5;
+  }
+}

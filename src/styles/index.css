@@ -1,0 +1,125 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+@media (min-width: 1440px) {
+  .home-hero-main {
+    padding-top: 0 !important;
+  }
+
+  .home-hero-banner {
+    height: 100vh !important;
+    height: 100svh !important;
+  }
+
+  .home-hero-header .home-header-utility,
+  .home-hero-header .home-header-bar {
+    background-color: rgba(26, 24, 21, 0.78) !important;
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+
+  .home-hero-header .home-header-bar {
+    border-color: rgba(246, 243, 236, 0.22) !important;
+  }
+
+  .home-hero-header .home-header-wordmark,
+  .home-hero-header .home-header-nav button,
+  .home-hero-header .home-header-actions button {
+    color: #F6F3EC !important;
+  }
+
+  .home-hero-header .home-header-nav button:hover,
+  .home-hero-header .home-header-actions button:hover {
+    color: #C9A362 !important;
+  }
+
+  .home-hero-header .home-header-actions button:hover {
+    background-color: rgba(246, 243, 236, 0.12) !important;
+  }
+}
+@media (max-width: 639px) {
+  .home-hero-banner {
+    height: 52vw !important;
+    min-height: 190px;
+    max-height: 260px;
+  }
+
+  .home-hero-copy,
+  .home-hero-scroll-cue {
+    display: none;
+  }
+}
+@media (max-width: 767px) {
+  .home-header-utility {
+    display: none !important;
+  }
+
+  .mobile-nav-main {
+    padding-top: 64px !important;
+    padding-bottom: calc(40px + env(safe-area-inset-bottom)) !important;
+  }
+
+  .mobile-bottom-nav {
+    height: calc(40px + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+.price-range-track {
+  height: 4px;
+  margin-top: 8px;
+  margin-bottom: 8px;
+  border-radius: 9999px;
+}
+
+.price-range-input {
+  position: absolute;
+  inset: -7px 0 auto;
+  z-index: 2;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  pointer-events: none;
+  -webkit-appearance: none;
+}
+
+.price-range-max {
+  z-index: 3;
+}
+
+.price-range-input::-webkit-slider-runnable-track {
+  height: 4px;
+  background: transparent;
+}
+
+.price-range-input::-moz-range-track {
+  height: 4px;
+  background: transparent;
+}
+
+.price-range-input::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  appearance: none;
+  border: 2px solid #1A1815;
+  border-radius: 50%;
+  background: #F6F3EC;
+  box-shadow: 0 0 0 1px #1A1815;
+  cursor: grab;
+  pointer-events: auto;
+  -webkit-appearance: none;
+}
+
+.price-range-input::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #1A1815;
+  border-radius: 50%;
+  background: #F6F3EC;
+  box-shadow: 0 0 0 1px #1A1815;
+  cursor: grab;
+  pointer-events: auto;
+}
