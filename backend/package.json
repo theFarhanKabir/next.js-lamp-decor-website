@@ -1,0 +1,19 @@
+{
+  "name": "cloud-lamps-store-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.21.0 <27"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env src/server.mjs",
+    "dev:watch": "node --watch --env-file-if-exists=.env src/server.mjs",
+    "start": "node --env-file-if-exists=.env src/server.mjs",
+    "check": "node --check src/server.mjs && node --check src/supabase.mjs && node --check src/images.mjs && node --check src/validation.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.117.3",
+    "sharp": "0.35.5"
+  }
+}

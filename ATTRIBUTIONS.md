@@ -1,3 +1,1 @@
-This Figma Make file includes components from [shadcn/ui](https://ui.shadcn.com/) used under [MIT license](https://github.com/shadcn-ui/ui/blob/main/LICENSE.md).
-
-This Figma Make file includes photos from [Unsplash](https://unsplash.com) used under [license](https://unsplash.com/license).
+﻿Photos used in this project are from [Unsplash](https://unsplash.com) and are used under the [Unsplash License](https://unsplash.com/license).

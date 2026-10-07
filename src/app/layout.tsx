@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "../styles/index.css";
+import Providers from "./providers";
 
 export const metadata: Metadata = {
   title: "Cloud Lamps & Mirrors",
@@ -18,8 +19,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>
-        <div id="root">{children}</div>
+      <body suppressHydrationWarning>
+        <div id="root">
+          <Providers>{children}</Providers>
+        </div>
       </body>
     </html>
   );

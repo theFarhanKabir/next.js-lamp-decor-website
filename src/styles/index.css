@@ -2,6 +2,94 @@
 @import './tailwind.css';
 @import './theme.css';
 
+@keyframes storefront-page-arrive {
+  from { opacity: 0.72; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.storefront-page-enter { animation: storefront-page-arrive 360ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+::selection { color: #1A1815; background: #E7D7BD; }
+
+:focus-visible { outline: 2px solid #A67C3D; outline-offset: 3px; }
+
+button:not(:disabled),
+a[href],
+[role="button"],
+summary,
+select,
+input[type="checkbox"],
+input[type="radio"],
+input[type="range"],
+input[type="file"]::file-selector-button { cursor: pointer; }
+
+button:disabled,
+[aria-disabled="true"] { cursor: not-allowed; }
+
+html { scroll-behavior: smooth; }
+
+@keyframes mobile-filter-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes mobile-filter-backdrop-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes mobile-filter-drawer-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes mobile-filter-drawer-out {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+
+.mobile-filter-overlay-opening { animation: mobile-filter-backdrop-in 220ms ease-out both; }
+.mobile-filter-overlay-closing { animation: mobile-filter-backdrop-out 220ms ease-in both; }
+.mobile-filter-drawer-opening { animation: mobile-filter-drawer-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.mobile-filter-drawer-closing { animation: mobile-filter-drawer-out 220ms cubic-bezier(0.4, 0, 1, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .storefront-page-enter { animation-duration: 1ms; }
+  .mobile-filter-overlay-opening,
+  .mobile-filter-overlay-closing,
+  .mobile-filter-drawer-opening,
+  .mobile-filter-drawer-closing { animation-duration: 1ms; }
+}
+
+.editorial-break {
+  height: clamp(460px, 40vw, 680px);
+}
+
+.editorial-break-photo {
+  object-position: 58% center;
+}
+
+@media (min-width: 640px) and (max-width: 1023px) {
+  .editorial-break {
+    height: clamp(440px, 58vw, 600px);
+  }
+}
+
+@media (max-width: 639px) {
+  .editorial-break {
+    height: clamp(500px, 72svh, 680px);
+  }
+
+  .editorial-break-photo {
+    object-position: 68% center;
+  }
+
+  .editorial-break-shade {
+    background: linear-gradient(90deg, rgba(24, 21, 24, 0.76) 0%, rgba(31, 28, 32, 0.54) 62%, rgba(31, 28, 32, 0.24) 100%), linear-gradient(0deg, rgba(18, 17, 19, 0.24), transparent 48%);
+  }
+}
+
 @media (min-width: 1440px) {
   .home-hero-main {
     padding-top: 0 !important;
@@ -12,31 +100,6 @@
     height: 100svh !important;
   }
 
-  .home-hero-header .home-header-utility,
-  .home-hero-header .home-header-bar {
-    background-color: rgba(26, 24, 21, 0.78) !important;
-    -webkit-backdrop-filter: blur(8px);
-    backdrop-filter: blur(8px);
-  }
-
-  .home-hero-header .home-header-bar {
-    border-color: rgba(246, 243, 236, 0.22) !important;
-  }
-
-  .home-hero-header .home-header-wordmark,
-  .home-hero-header .home-header-nav button,
-  .home-hero-header .home-header-actions button {
-    color: #F6F3EC !important;
-  }
-
-  .home-hero-header .home-header-nav button:hover,
-  .home-hero-header .home-header-actions button:hover {
-    color: #C9A362 !important;
-  }
-
-  .home-hero-header .home-header-actions button:hover {
-    background-color: rgba(246, 243, 236, 0.12) !important;
-  }
 }
 @media (max-width: 639px) {
   .home-hero-banner {
@@ -106,7 +169,7 @@
   appearance: none;
   border: 2px solid #1A1815;
   border-radius: 50%;
-  background: #F6F3EC;
+  background: #FFFFFF;
   box-shadow: 0 0 0 1px #1A1815;
   cursor: grab;
   pointer-events: auto;
@@ -118,7 +181,7 @@
   height: 12px;
   border: 2px solid #1A1815;
   border-radius: 50%;
-  background: #F6F3EC;
+  background: #FFFFFF;
   box-shadow: 0 0 0 1px #1A1815;
   cursor: grab;
   pointer-events: auto;

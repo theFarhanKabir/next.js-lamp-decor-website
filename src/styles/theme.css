@@ -4,25 +4,25 @@
   --font-size: 16px;
 
   /* Maison palette mapped to Tailwind semantic tokens */
-  --background: #F6F3EC;
+  --background: #FFFFFF;
   --foreground: #1A1815;
-  --card: #FBF9F4;
+  --card: #FFFFFF;
   --card-foreground: #1A1815;
-  --popover: #FBF9F4;
+  --popover: #FFFFFF;
   --popover-foreground: #1A1815;
   --primary: #1A1815;
-  --primary-foreground: #F6F3EC;
-  --secondary: #EFEBE1;
+  --primary-foreground: #FFFFFF;
+  --secondary: #FFFFFF;
   --secondary-foreground: #1A1815;
-  --muted: #EFEBE1;
+  --muted: #FFFFFF;
   --muted-foreground: #8A8377;
-  --accent: #EDE3D0;
+  --accent: #FFFFFF;
   --accent-foreground: #A67C3D;
   --destructive: #B4593F;
-  --destructive-foreground: #F6F3EC;
+  --destructive-foreground: #FFFFFF;
   --border: #DBD5C7;
   --input: transparent;
-  --input-background: #FBF9F4;
+  --input-background: #FFFFFF;
   --switch-background: #DBD5C7;
   --font-weight-medium: 500;
   --font-weight-normal: 400;
@@ -30,9 +30,9 @@
   --radius: 4px;
 
   /* Maison design tokens */
-  --paper: #F6F3EC;
-  --paper-raised: #FBF9F4;
-  --paper-sunken: #EFEBE1;
+  --paper: #FFFFFF;
+  --paper-raised: #FFFFFF;
+  --paper-sunken: #FFFFFF;
   --ink: #1A1815;
   --ink-soft: #4A463F;
   --ink-muted: #8A8377;
@@ -54,11 +54,11 @@
   --chart-4: #B07C2E;
   --chart-5: #4A463F;
 
-  --sidebar: #FBF9F4;
+  --sidebar: #FFFFFF;
   --sidebar-foreground: #1A1815;
   --sidebar-primary: #1A1815;
-  --sidebar-primary-foreground: #F6F3EC;
-  --sidebar-accent: #EFEBE1;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #FFFFFF;
   --sidebar-accent-foreground: #4A463F;
   --sidebar-border: #DBD5C7;
   --sidebar-ring: #A67C3D;
@@ -66,30 +66,30 @@
 
 .dark {
   --background: #1A1815;
-  --foreground: #F6F3EC;
+  --foreground: #FFFFFF;
   --card: #252118;
-  --card-foreground: #F6F3EC;
+  --card-foreground: #FFFFFF;
   --popover: #252118;
-  --popover-foreground: #F6F3EC;
-  --primary: #F6F3EC;
+  --popover-foreground: #FFFFFF;
+  --primary: #FFFFFF;
   --primary-foreground: #1A1815;
   --secondary: #2E2A24;
-  --secondary-foreground: #F6F3EC;
+  --secondary-foreground: #FFFFFF;
   --muted: #2E2A24;
   --muted-foreground: #8A8377;
   --accent: #3A3020;
   --accent-foreground: #C9A362;
   --destructive: #B4593F;
-  --destructive-foreground: #F6F3EC;
+  --destructive-foreground: #FFFFFF;
   --border: #3A3530;
   --input: #2E2A24;
   --ring: #A67C3D;
   --sidebar: #252118;
-  --sidebar-foreground: #F6F3EC;
-  --sidebar-primary: #F6F3EC;
+  --sidebar-foreground: #FFFFFF;
+  --sidebar-primary: #FFFFFF;
   --sidebar-primary-foreground: #1A1815;
   --sidebar-accent: #2E2A24;
-  --sidebar-accent-foreground: #F6F3EC;
+  --sidebar-accent-foreground: #FFFFFF;
   --sidebar-border: #3A3530;
   --sidebar-ring: #A67C3D;
 }
