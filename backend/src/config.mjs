@@ -3,7 +3,7 @@ const maxImageBytes = Number(process.env.MAX_IMAGE_BYTES ?? 12 * 1024 * 1024);
 const maxJsonBytes = Number(process.env.MAX_JSON_BYTES ?? 1024 * 1024);
 
 export const config = Object.freeze({
-  host: process.env.HOST ?? "127.0.0.1",
+  host: process.env.HOST || (process.env.VERCEL ? "0.0.0.0" : "127.0.0.1"),
   port: Number.isInteger(port) && port > 0 && port < 65536 ? port : 4000,
   allowedOrigins: new Set((process.env.ALLOWED_ORIGINS || "http://localhost:3000").split(",").map((origin) => origin.trim()).filter(Boolean)),
   trustProxy: process.env.TRUST_PROXY === "true",

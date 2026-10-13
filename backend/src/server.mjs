@@ -1532,6 +1532,11 @@ function checkOrigin(request, response) {
   if (!origin) return;
   const path = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`).pathname;
   if (["/api/payments/sslcommerz/success", "/api/payments/sslcommerz/fail", "/api/payments/sslcommerz/cancel", "/api/payments/sslcommerz/ipn"].includes(path)) return;
+  let originUrl;
+  try { originUrl = new URL(origin); }
+  catch { throw new HttpError(403, "This website is not allowed to call the API."); }
+  const requestHost = request.headers.host?.toLowerCase();
+  if (requestHost && originUrl.host.toLowerCase() === requestHost) return;
   if (!config.allowedOrigins.has(origin)) throw new HttpError(403, "This website is not allowed to call the API.");
   if (config.allowedOrigins.has(origin)) {
     response.setHeader("Access-Control-Allow-Origin", origin);
