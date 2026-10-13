@@ -1,8 +1,9 @@
 "use client";
-import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { createClient as createSupabaseBrowserClient } from "../lib/supabase/client";
+import { apiFetch } from "../lib/api";
 import {
   ShoppingBag, ShoppingCart, Heart, Home, Search, User, X, Menu,
   ChevronRight, ChevronLeft, ChevronDown, Star, Minus, Plus,
@@ -24,9 +25,12 @@ interface CartItem {
   selectedSize?: string;
   selectedColor?: string;
   selectedFabric?: string;
-  selectedLeg?: string;
+  selectedLegFinish?: string;
   price: number;
 }
+
+type StoredCartItem = { productId: string; quantity: number; options: { size?: string; color?: string; fabric?: string; legFinish?: string } };
+type StoredCustomerState = { cartItems: StoredCartItem[]; wishlistProductIds: string[] };
 
 interface ToastItem {
   id: string;
@@ -35,9 +39,13 @@ interface ToastItem {
 }
 
 type Page = { name: string; params?: Record<string, string> };
+type StoreSubcategory = { name: string; slug: string; parentSlug: string; parentName: string };
+type CatalogSource = "loading" | "fallback" | "supabase";
 
 interface AppCtx {
   products: Product[];
+  categories: StoreSubcategory[];
+  catalogSource: CatalogSource;
   homepageContent: HomepageContent;
   cart: CartItem[];
   wishlist: string[];
@@ -46,11 +54,13 @@ interface AppCtx {
   toasts: ToastItem[];
   user: SupabaseUser | null;
   authReady: boolean;
+  storeStateReady: boolean;
   currentPage: Page;
   navigate: (name: string, params?: Record<string, string>) => void;
   goBack: () => void;
   addToCart: (product: Product, opts?: { size?: string; color?: string; fabric?: string; legFinish?: string; quantity?: number; price?: number }) => void;
   removeFromCart: (id: string) => void;
+  clearCart: () => void;
   updateQty: (id: string, qty: number) => void;
   toggleWishlist: (id: string) => void;
   signOut: () => Promise<void>;
@@ -232,17 +242,103 @@ function formatPrice(p: number): string {
   return "৳" + (p / 100).toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
-function resolvePrice(product: Product, size?: string, fabric?: string): number {
+function productImageSrcSet(product: Product, imageUrl: string) {
+  const variants = product.imageVariants?.[imageUrl];
+  return variants?.length ? variants.map((variant) => `${variant.url} ${variant.width}w`).join(", ") : undefined;
+}
+
+function resolvePrice(product: Product, size?: string): number {
   let price = product.salePrice ?? product.basePrice;
   if (size && product.sizes) {
     const s = product.sizes.find((x) => x.label === size);
     if (s) price += s.delta;
   }
-  if (fabric && product.fabrics) {
-    const f = product.fabrics.find((x) => x.label === fabric);
-    if (f) price += f.delta;
+  return price;
+}
+
+function cartItemPrice(product: Product, options: StoredCartItem["options"]): number {
+  let price = resolvePrice(product, options.size);
+  for (const [collection, label] of [[product.fabrics, options.fabric], [product.legs, options.legFinish]] as const) {
+    if (!label || !collection) continue;
+    const option = collection.find((item) => item.label === label);
+    if (option) price += option.delta;
   }
   return price;
+}
+
+function parseStoredState(value: unknown): StoredCustomerState {
+  if (!value || typeof value !== "object") return { cartItems: [], wishlistProductIds: [] };
+  const record = value as Record<string, unknown>;
+  const cartItems = Array.isArray(record.cartItems) ? record.cartItems.flatMap((raw): StoredCartItem[] => {
+    if (!raw || typeof raw !== "object") return [];
+    const item = raw as Record<string, unknown>;
+    const productId = typeof item.productId === "string" ? item.productId : "";
+    const quantity = Number(item.quantity);
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(productId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 50) return [];
+    const rawOptions = item.options && typeof item.options === "object" ? item.options as Record<string, unknown> : {};
+    const options: StoredCartItem["options"] = {};
+    for (const key of ["size", "color", "fabric", "legFinish"] as const) {
+      if (typeof rawOptions[key] === "string" && rawOptions[key].length <= 80) options[key] = rawOptions[key] as string;
+    }
+    return [{ productId, quantity, options }];
+  }).slice(0, 100) : [];
+  const wishlistProductIds = Array.isArray(record.wishlistProductIds)
+    ? [...new Set(record.wishlistProductIds.filter((id): id is string => typeof id === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)))].slice(0, 300)
+    : [];
+  return { cartItems, wishlistProductIds };
+}
+
+function mergeStoredStates(...states: StoredCustomerState[]): StoredCustomerState {
+  const cartByKey = new Map<string, StoredCartItem>();
+  const wishlist = new Set<string>();
+  const [remoteState, accountCache, ...guestStates] = states;
+  // The account cache and Supabase row are two copies of the same cart. Keep
+  // the larger quantity for matching variants; only a guest cart is additive.
+  for (const state of [remoteState, accountCache].filter(Boolean)) {
+    for (const item of state.cartItems) {
+      const key = `${item.productId}:${JSON.stringify(item.options)}`;
+      const existing = cartByKey.get(key);
+      cartByKey.set(key, { ...item, quantity: Math.max(existing?.quantity ?? 0, item.quantity) });
+    }
+    for (const productId of state.wishlistProductIds) wishlist.add(productId);
+  }
+  for (const state of guestStates) {
+    for (const item of state.cartItems) {
+      const key = `${item.productId}:${JSON.stringify(item.options)}`;
+      const existing = cartByKey.get(key);
+      cartByKey.set(key, { ...item, quantity: Math.min(50, (existing?.quantity ?? 0) + item.quantity) });
+    }
+    for (const productId of state.wishlistProductIds) wishlist.add(productId);
+  }
+  return { cartItems: [...cartByKey.values()].slice(0, 100), wishlistProductIds: [...wishlist].slice(0, 300) };
+}
+
+function materializeCart(state: StoredCustomerState, products: Product[]): CartItem[] {
+  const productById = new Map(products.map((product) => [product.id, product]));
+  return state.cartItems.flatMap((stored): CartItem[] => {
+    const product = productById.get(stored.productId);
+    if (!product) return [];
+    return [{
+      id: uid(), product, quantity: stored.quantity,
+      selectedSize: stored.options.size, selectedColor: stored.options.color,
+      selectedFabric: stored.options.fabric, selectedLegFinish: stored.options.legFinish,
+      price: cartItemPrice(product, stored.options),
+    }];
+  });
+}
+
+function storedStateFromCart(cart: CartItem[], wishlist: string[]): StoredCustomerState {
+  return {
+    cartItems: cart.map((item) => ({
+      productId: item.product.id,
+      quantity: item.quantity,
+      options: {
+        size: item.selectedSize, color: item.selectedColor,
+        fabric: item.selectedFabric, legFinish: item.selectedLegFinish,
+      },
+    })),
+    wishlistProductIds: wishlist,
+  };
 }
 
 function uid() {
@@ -320,6 +416,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [wishlist, setWishlist] = useState<string[]>([]);
+  const [storeStateReady, setStoreStateReady] = useState(false);
   const [miniCartOpen, setMiniCartOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -327,24 +424,102 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [authReady, setAuthReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState<Product[]>(PRODUCTS);
+  const [categories, setCategories] = useState<StoreSubcategory[]>([]);
+  const [catalogSource, setCatalogSource] = useState<CatalogSource>("loading");
   const [homepageContent, setHomepageContent] = useState<HomepageContent>(DEFAULT_HOMEPAGE_CONTENT);
+  const hydratedStateKeyRef = useRef("");
+  const storeStateKey = authReady ? `cloud-lamps-store-state-v1:${user?.id ?? "guest"}` : "";
   const currentPage = pageFromPathname(pathname || "/");
   const finishLoading = useCallback(() => setLoading(false), []);
 
   useEffect(() => {
     let active = true;
-    fetch("/api/catalog", { cache: "no-store" }).then((response) => response.json()).then((result) => {
-      if (active && Array.isArray(result.products)) setProducts(result.products);
-    }).catch(() => {});
-    return () => { active = false; };
+    let requestId = 0;
+    const loadCatalog = () => {
+      const currentRequest = ++requestId;
+      apiFetch("/api/catalog", { cache: "no-store" }).then((response) => response.json()).then((result) => {
+        if (!active || currentRequest !== requestId) return;
+        if (Array.isArray(result.products)) setProducts(result.products);
+        if (Array.isArray(result.categories)) setCategories(result.categories);
+        setCatalogSource(result.source === "supabase" ? "supabase" : "fallback");
+      }).catch(() => { if (active && currentRequest === requestId) setCatalogSource("fallback"); });
+    };
+    loadCatalog();
+    window.addEventListener("storefront-data-updated", loadCatalog);
+    return () => { active = false; window.removeEventListener("storefront-data-updated", loadCatalog); };
   }, []);
 
   useEffect(() => {
+    if (!storeStateKey || catalogSource === "loading") return;
     let active = true;
-    fetch("/api/homepage-content", { cache: "no-store" }).then((response) => response.json()).then((result) => {
-      if (active && result.content?.heroSlides && result.content?.categories && result.content?.hotDeals) setHomepageContent(result.content);
-    }).catch(() => {});
+    hydratedStateKeyRef.current = "";
+    setStoreStateReady(false);
+    const readLocal = (key: string) => {
+      try { return parseStoredState(JSON.parse(window.localStorage.getItem(key) ?? "null")); }
+      catch { return { cartItems: [], wishlistProductIds: [] }; }
+    };
+    const loadState = async () => {
+      const localState = readLocal(storeStateKey);
+      const guestState = user ? readLocal("cloud-lamps-store-state-v1:guest") : { cartItems: [], wishlistProductIds: [] };
+      let remoteState: StoredCustomerState = { cartItems: [], wishlistProductIds: [] };
+      if (user) {
+        try {
+          const response = await apiFetch("/api/customer/state", { cache: "no-store" });
+          if (response.ok) remoteState = parseStoredState(await response.json());
+        } catch { /* Use the local account cache until the service is reachable. */ }
+      }
+      if (!active) return;
+      const availableIds = new Set(products.map((product) => product.id));
+      const merged = mergeStoredStates(remoteState, localState, guestState);
+      merged.cartItems = merged.cartItems.filter((item) => availableIds.has(item.productId));
+      merged.wishlistProductIds = merged.wishlistProductIds.filter((id) => availableIds.has(id));
+      setCart(materializeCart(merged, products));
+      setWishlist(merged.wishlistProductIds);
+      hydratedStateKeyRef.current = storeStateKey;
+      setStoreStateReady(true);
+      try { window.localStorage.setItem(storeStateKey, JSON.stringify(merged)); } catch { /* Browser storage may be unavailable. */ }
+      if (user) {
+        try {
+          const response = await apiFetch("/api/customer/state", {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(merged),
+          });
+          if (response.ok && (guestState.cartItems.length || guestState.wishlistProductIds.length)) {
+            window.localStorage.removeItem("cloud-lamps-store-state-v1:guest");
+          }
+        } catch { /* The local account cache remains available for the next attempt. */ }
+      }
+    };
+    void loadState();
     return () => { active = false; };
+  }, [storeStateKey, catalogSource, products, user]);
+
+  useEffect(() => {
+    if (!storeStateReady || !storeStateKey || hydratedStateKeyRef.current !== storeStateKey) return;
+    const state = storedStateFromCart(cart, wishlist);
+    try { window.localStorage.setItem(storeStateKey, JSON.stringify(state)); } catch { /* Browser storage may be unavailable. */ }
+    if (!user) return;
+    const timer = window.setTimeout(() => {
+      void apiFetch("/api/customer/state", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(state),
+      }).catch(() => {});
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [cart, wishlist, storeStateReady, storeStateKey, user]);
+
+  useEffect(() => {
+    let active = true;
+    let requestId = 0;
+    const loadHomepageContent = () => {
+      const currentRequest = ++requestId;
+      apiFetch("/api/homepage-content", { cache: "no-store" }).then((response) => response.json()).then((result) => {
+        if (active && currentRequest === requestId && result.content?.heroSlides && result.content?.categories && result.content?.hotDeals) setHomepageContent(result.content);
+      }).catch(() => {});
+    };
+    loadHomepageContent();
+    window.addEventListener("storefront-data-updated", loadHomepageContent);
+    return () => { active = false; window.removeEventListener("storefront-data-updated", loadHomepageContent); };
   }, []);
 
   useEffect(() => {
@@ -355,15 +530,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     let active = true;
-    supabase.auth.getUser().then(({ data }) => {
+    supabase.auth.getUser().then(async ({ data }) => {
       if (!active) return;
+      if (data.user?.app_metadata?.role === "admin") {
+        // Clear a legacy shared admin cookie once so it cannot appear as a customer login.
+        await supabase.auth.signOut({ scope: "local" });
+        if (active) { setUser(null); setAuthReady(true); }
+        return;
+      }
       setUser(data.user);
       setAuthReady(true);
     }).catch(() => {
       if (active) setAuthReady(true);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+      if (session?.user?.app_metadata?.role === "admin") {
+        void supabase.auth.signOut({ scope: "local" });
+        setUser(null);
+      } else setUser(session?.user ?? null);
       setAuthReady(true);
     });
 
@@ -383,20 +567,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [router]);
   const addToCart = useCallback((product: Product, opts?: { size?: string; color?: string; fabric?: string; legFinish?: string; quantity?: number; price?: number }) => {
     const quantity = Math.max(1, Math.floor(opts?.quantity ?? 1));
-    const legDelta = opts?.legFinish && product.legs ? (product.legs.find((leg) => leg.label === opts.legFinish)?.delta ?? 0) : 0;
-    const price = opts?.price ?? resolvePrice(product, opts?.size, opts?.fabric) + legDelta;
+    const options = { size: opts?.size, color: opts?.color, fabric: opts?.fabric, legFinish: opts?.legFinish };
+    const price = opts?.price ?? cartItemPrice(product, options);
     setCart((prev) => {
       const existing = prev.find(
-        (i) => i.product.id === product.id && i.selectedColor === opts?.color && i.selectedSize === opts?.size && i.selectedFabric === opts?.fabric && i.selectedLeg === opts?.legFinish
+        (i) => i.product.id === product.id && i.selectedColor === opts?.color && i.selectedSize === opts?.size
+          && i.selectedFabric === opts?.fabric && i.selectedLegFinish === opts?.legFinish
       );
       if (existing) {
         return prev.map((i) =>
           i.id === existing.id ? { ...i, quantity: i.quantity + quantity } : i
         );
       }
-      return [...prev, { id: uid(), product, quantity, selectedSize: opts?.size, selectedColor: opts?.color, selectedFabric: opts?.fabric, selectedLeg: opts?.legFinish, price }];
+      return [...prev, { id: uid(), product, quantity, selectedSize: opts?.size, selectedColor: opts?.color, selectedFabric: opts?.fabric, selectedLegFinish: opts?.legFinish, price }];
     });
-    const variant = [opts?.size, opts?.color, opts?.fabric, opts?.legFinish].filter(Boolean).join(" · ");
+    const variant = [opts?.size, opts?.color].filter(Boolean).join(" · ");
     setToasts((prev) => [...prev, { id: uid(), product, variant }]);
     setMiniCartOpen(true);
   }, []);
@@ -404,6 +589,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const removeFromCart = useCallback((id: string) => {
     setCart((prev) => prev.filter((i) => i.id !== id));
   }, []);
+
+  const clearCart = useCallback(() => setCart([]), []);
 
   const updateQty = useCallback((id: string, qty: number) => {
     if (qty <= 0) setCart((prev) => prev.filter((i) => i.id !== id));
@@ -417,7 +604,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     const supabase = createSupabaseBrowserClient();
     if (!supabase) throw new Error("Account sign-in is not configured yet.");
-    const { error } = await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut({ scope: "local" });
     if (error) throw error;
   }, []);
 
@@ -427,16 +614,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const cartCount = cart.reduce((s, i) => s + i.quantity, 0);
   const cartSubtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
+  const hotDealProductIds = useMemo(() => new Set(homepageContent.hotDealsActive ? homepageContent.hotDeals.filter((deal) => deal.active).map((deal) => deal.productId) : []), [homepageContent.hotDealsActive, homepageContent.hotDeals]);
+  const newArrivalProductIds = useMemo(() => new Set(homepageContent.newArrivals.active ? homepageContent.newArrivals.productIds : []), [homepageContent.newArrivals.active, homepageContent.newArrivals.productIds]);
+  const collectionProducts = useMemo(() => products.map((product) => ({
+    ...product,
+    promotions: [...new Set([...(product.promotions ?? []), ...(hotDealProductIds.has(product.id) ? ["sale" as const] : []), ...(newArrivalProductIds.has(product.id) ? ["new" as const] : [])])],
+    badge: hotDealProductIds.has(product.id) ? "sale" as const : newArrivalProductIds.has(product.id) ? "new" as const : product.badge,
+  })), [products, hotDealProductIds, newArrivalProductIds]);
 
   return (
     <AppContext.Provider value={{
-        products, homepageContent, cart, wishlist, miniCartOpen, searchOpen, toasts, currentPage,
-        navigate, goBack, addToCart, removeFromCart, updateQty, toggleWishlist,
+        products: collectionProducts, categories, catalogSource, homepageContent, cart, wishlist, miniCartOpen, searchOpen, toasts, currentPage,
+        navigate, goBack, addToCart, removeFromCart, clearCart, updateQty, toggleWishlist,
         openMiniCart: () => setMiniCartOpen(true),
         closeMiniCart: () => setMiniCartOpen(false),
         openSearch: () => setSearchOpen(true),
         closeSearch: () => setSearchOpen(false),
-        dismissToast, cartCount, cartSubtotal, user, authReady, signOut,
+        dismissToast, cartCount, cartSubtotal, user, authReady, storeStateReady, signOut,
       }}>
       {loading && <Preloader onComplete={finishLoading} />}
       {children}
@@ -518,7 +712,7 @@ function CustomerReviews({
     setPending(true);
     setNotice("");
     try {
-      const response = await fetch("/api/reviews", {
+      const response = await apiFetch("/api/reviews", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ productSlug: product.id, rating, title, body }),
@@ -612,6 +806,8 @@ function ProductCard({ product, index = 0 }: { product: Product; index?: number 
         >
           <img
             src={product.images.silo}
+            srcSet={product.images.siloSrcSet}
+            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
             alt={product.name}
             onError={handleImgError}
             className="absolute inset-0 w-full h-full object-cover transition-opacity duration-500"
@@ -619,6 +815,8 @@ function ProductCard({ product, index = 0 }: { product: Product; index?: number 
           />
           <img
             src={product.images.lifestyle}
+            srcSet={product.images.lifestyleSrcSet}
+            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
             alt=""
             onError={handleImgError}
             className="absolute inset-0 w-full h-full object-cover transition-all duration-500"
@@ -723,24 +921,30 @@ const MEGA_DATA: Record<string, { links: string[] }> = {
   TABLES: { links: ["Console Tables", "Side Tables", "Coffee Tables", "Bedside Tables", "Nesting Tables"] },
   SHADES: { links: ["Linen Shades", "Pleated Shades", "Drum Shades", "Tapered Shades", "Velvet Shades"] },
 };
+function getSubcategoryLinks(category: string, categories: StoreSubcategory[], catalogSource: CatalogSource) {
+  const parentSlug = category === "LAMPS" ? "lamps" : category.toLowerCase();
+  const saved = categories.filter((item) => item.parentSlug === parentSlug);
+  if (catalogSource === "loading") return [];
+  if (catalogSource === "supabase") return saved;
+  return saved.length ? saved : (MEGA_DATA[category]?.links ?? []).map((name) => ({ name, slug: categoryRouteSlug(name), parentSlug, parentName: category }));
+}
+const categoryRouteSlug = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 function MegaMenu({ category, onClose }: { category: string; onClose: () => void }) {
-  const { navigate } = useApp();
-  const data = MEGA_DATA[category];
-  if (!data) return null;
-  const categorySlug = category === "LAMPS" ? "lighting" : category.toLowerCase();
-
+  const { navigate, categories, catalogSource } = useApp();
+  const links = getSubcategoryLinks(category, categories, catalogSource);
+  if (!links.length) return null;
   return (
     <div className="absolute top-full left-0 right-0 border-t border-[#DBD5C7] z-50 bg-white shadow-[0_16px_48px_-8px_rgba(26,24,21,0.18)]">
       <div className="max-w-[1440px] mx-auto px-8 py-7">
         <p className="text-[10px] font-medium tracking-widest uppercase text-[#A67C3D] mb-5">Shop {category.toLowerCase()}</p>
         <ul className="grid grid-cols-5 gap-5">
-          {data.links.map((link) => (
-            <li key={link}>
+          {links.map((link) => (
+            <li key={link.slug}>
               <button
-                onClick={() => { navigate("listing", { category: categorySlug }); onClose(); }}
+                onClick={() => { navigate("listing", { category: link.slug }); onClose(); }}
                 className="text-[13px] text-[#4A463F] hover:text-[#A67C3D] transition-colors text-left"
               >
-                {link}
+                {link.name}
               </button>
             </li>
           ))}
@@ -750,7 +954,7 @@ function MegaMenu({ category, onClose }: { category: string; onClose: () => void
   );
 }
 function Header() {
-  const { cartCount, wishlist, user, navigate, openMiniCart, openSearch } = useApp();
+  const { cartCount, wishlist, user, navigate, openMiniCart, openSearch, categories, catalogSource } = useApp();
   const [activeMega, setActiveMega] = useState<string | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [mobileActiveMenu, setMobileActiveMenu] = useState<string | null>(null);
@@ -787,9 +991,8 @@ function Header() {
 
         {/* Main bar */}
         <div
-          className="home-header-bar bg-white border-b border-[#DBD5C7] transition-all duration-300"
+          className={`home-header-bar bg-white border-b border-[#DBD5C7] transition-all duration-300 ${scrolled ? "home-header-bar-scrolled" : ""}`}
           style={{
-            height: scrolled ? 58 : 64,
             backdropFilter: scrolled || activeMega ? "blur(12px)" : undefined,
             WebkitBackdropFilter: scrolled || activeMega ? "blur(12px)" : undefined,
             boxShadow: scrolled ? "0 4px 24px -8px rgba(26,24,21,0.12)" : "none",
@@ -801,14 +1004,14 @@ function Header() {
               onClick={() => setMobileOpen(true)}
               aria-label="Open menu"
             >
-              <Menu size={22} />
+              <Menu size={23} />
             </button>
 
             {/* Wordmark */}
             <button
               onClick={() => navigate("home")}
               className="home-header-wordmark tracking-[0.15em] text-[#1A1815] shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A67C3D] rounded-sm"
-              style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: "clamp(12px, 4vw, 18px)" }}
+              style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: "clamp(13px, 4.2vw, 19px)" }}
             >
               Cloud Lamps & Mirrors
             </button>
@@ -820,7 +1023,7 @@ function Header() {
                   key={item.label}
                   onMouseEnter={() => onEnter(item.label, item.hasMega)}
                   onClick={() => { item.page ? navigate(item.page) : navigate("listing", { category: item.slug }); setActiveMega(null); }}
-                  className={`relative text-[11px] font-medium tracking-widest uppercase transition-colors group/nav py-1 focus-visible:outline-none ${item.page ? "text-[#A67C3D] hover:text-[#805B32]" : "text-[#4A463F] hover:text-[#1A1815]"}`}
+                  className={`relative text-[12px] font-medium tracking-widest uppercase transition-colors group/nav py-1 focus-visible:outline-none ${item.page ? "text-[#A67C3D] hover:text-[#805B32]" : "text-[#4A463F] hover:text-[#1A1815]"}`}
                 >
                   {item.label}
                   <span className="absolute bottom-0 left-0 h-px bg-[#A67C3D] transition-all duration-300 origin-left group-hover/nav:w-full w-0" />
@@ -840,7 +1043,7 @@ function Header() {
                   onClick={action}
                   className="hidden sm:flex w-10 h-10 items-center justify-center text-[#4A463F] hover:text-[#1A1815] rounded-[4px] hover:bg-[#FFFFFF] transition-colors"
                 >
-                  <Icon size={18} strokeWidth={1.5} />
+                  <Icon size={19} strokeWidth={1.5} />
                 </button>
               ))}
 
@@ -849,7 +1052,7 @@ function Header() {
                 onClick={() => navigate("wishlist")}
                 className="relative hidden sm:flex w-10 h-10 items-center justify-center text-[#4A463F] hover:text-[#1A1815] rounded-[4px] hover:bg-[#FFFFFF] transition-colors"
               >
-                <Heart size={18} strokeWidth={1.5} />
+                <Heart size={19} strokeWidth={1.5} />
                 {wishlist.length > 0 && (
                   <span className="absolute top-1.5 right-1.5 w-[14px] h-[14px] bg-[#1A1815] text-[#FFFFFF] text-[9px] flex items-center justify-center rounded-full">
                     {wishlist.length}
@@ -862,7 +1065,7 @@ function Header() {
                 aria-label={`Cart (${cartCount})`}
                 className="relative flex w-10 h-10 items-center justify-center text-[#4A463F] hover:text-[#1A1815] rounded-[4px] hover:bg-[#FFFFFF] transition-colors"
               >
-                <ShoppingBag size={18} strokeWidth={1.5} />
+                <ShoppingBag size={19} strokeWidth={1.5} />
                 {cartCount > 0 && (
                   <span className="absolute top-1.5 right-1.5 w-[14px] h-[14px] bg-[#A67C3D] text-[#FFFFFF] text-[9px] flex items-center justify-center rounded-full">
                     {cartCount}
@@ -897,7 +1100,7 @@ function Header() {
             <nav className="px-5 py-2 flex-1">
               {NAV_ITEMS.map((item) => {
                 const expanded = mobileActiveMenu === item.label;
-                const subcategories = MEGA_DATA[item.label]?.links ?? [];
+                const subcategories = getSubcategoryLinks(item.label, categories, catalogSource);
                 if (!item.hasMega) {
                   return (
                     <button
@@ -925,11 +1128,11 @@ function Header() {
                       <div className="pb-3 pl-3 flex flex-col">
                         {subcategories.map((subcategory) => (
                           <button
-                            key={subcategory}
-                            onClick={() => { navigate("listing", { category: item.slug }); setMobileOpen(false); setMobileActiveMenu(null); }}
+                            key={subcategory.slug}
+                            onClick={() => { navigate("listing", { category: subcategory.slug }); setMobileOpen(false); setMobileActiveMenu(null); }}
                             className="w-full text-left text-[13px] text-[#4A463F] py-2.5 hover:text-[#1A1815] transition-colors"
                           >
-                            {subcategory}
+                            {subcategory.name}
                           </button>
                         ))}
                         <button
@@ -997,7 +1200,7 @@ function MiniCartDrawer() {
             cart.map((item) => (
               <div key={item.id} className="flex gap-4">
                 <div className="w-20 h-24 rounded-[8px] overflow-hidden bg-[#FFFFFF] shrink-0">
-                  <img src={item.product.images.silo} alt={item.product.name} className="w-full h-full object-cover" />
+                  <img src={item.product.images.silo} srcSet={item.product.images.siloSrcSet} sizes="60px" alt={item.product.name} loading="lazy" className="w-full h-full object-cover" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-2 mb-1">
@@ -1006,8 +1209,8 @@ function MiniCartDrawer() {
                       <X size={13} />
                     </button>
                   </div>
-                  {(item.selectedColor || item.selectedSize || item.selectedFabric || item.selectedLeg) && (
-                    <p className="text-[11px] text-[#8A8377] mb-2">{[item.selectedSize, item.selectedColor, item.selectedFabric, item.selectedLeg].filter(Boolean).join(" · ")}</p>
+                  {(item.selectedColor || item.selectedSize || item.selectedFabric || item.selectedLegFinish) && (
+                    <p className="text-[11px] text-[#8A8377] mb-2">{[item.selectedSize, item.selectedColor, item.selectedFabric, item.selectedLegFinish].filter(Boolean).join(" · ")}</p>
                   )}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center border border-[#DBD5C7] rounded-[4px] h-8">
@@ -1271,7 +1474,8 @@ function HeroSection() {
   const [idx, setIdx] = useState(0);
   const [fading, setFading] = useState(false);
   const slides = homepageContent.heroSlides.filter((item) => item.active);
-  const activeSlides = slides.length ? slides : DEFAULT_HOMEPAGE_CONTENT.heroSlides;
+  const activeSlides = slides;
+  if (!activeSlides.length) return null;
   const activeIndex = idx % activeSlides.length;
   const slide = activeSlides[activeIndex];
   const changeSlide = (direction: number) => {
@@ -1367,6 +1571,7 @@ function HeroSection() {
 function CategorySection() {
   const { navigate, homepageContent } = useApp();
   const categories = homepageContent.categories.filter((category) => category.active);
+  if (!categories.length) return null;
   return (
     <section className="mx-auto max-w-[1800px] bg-white px-5 py-10 sm:px-8 md:py-14 xl:px-10">
       <Reveal>
@@ -1393,6 +1598,29 @@ function CategorySection() {
             </button>
           </Reveal>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function NewArrivals() {
+  const { homepageContent, navigate, products } = useApp();
+  const arrivals = homepageContent.newArrivals.productIds
+    .map((id) => products.find((product) => product.id === id))
+    .filter((product): product is Product => Boolean(product));
+  if (!homepageContent.newArrivals.active || !arrivals.length) return null;
+  return (
+    <section className="bg-[#F8F7F3] px-5 py-12 sm:px-8 md:py-16 xl:px-10">
+      <div className="mx-auto max-w-[1440px]">
+        <Reveal>
+          <div className="mb-7 flex items-end justify-between gap-4">
+            <div><p className="mb-2 text-[10px] font-medium uppercase tracking-[0.2em] text-[#8A642E]">{homepageContent.newArrivals.eyebrow}</p><h2 className="text-2xl font-light text-[#1A1815] sm:text-3xl" style={{ fontFamily: "'Fraunces', serif" }}>{homepageContent.newArrivals.title}</h2></div>
+            <button onClick={() => navigate("listing", { category: "new" })} className="text-[10px] font-medium uppercase tracking-widest text-[#4A463F] hover:text-black">Shop all <ArrowRight className="ml-1 inline" size={12} /></button>
+          </div>
+        </Reveal>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+          {arrivals.map((product, index) => <Reveal key={product.id} delay={index * 50}><button onClick={() => navigate("product", { id: product.id })} className="group w-full text-left"><span className="relative mb-3 block aspect-[4/5] overflow-hidden rounded-md bg-white"><img src={product.images.silo || product.images.lifestyle} srcSet={product.images.siloSrcSet} sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw" alt={product.name} onError={handleImgError} loading="lazy" className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" /><span className="absolute left-3 top-3 rounded-full bg-[#1A1815] px-3 py-1.5 text-[9px] font-semibold uppercase tracking-wider text-white">New</span></span><span className="block text-[13px] font-semibold text-[#1A1815]">{product.name}</span><span className="mt-1 block text-[12px] text-[#6F695F]">{formatPrice(product.salePrice ?? product.basePrice)}</span></button></Reveal>)}
+        </div>
       </div>
     </section>
   );
@@ -1564,6 +1792,7 @@ function BrandBento() {
 function HotDeals() {
   const { addToCart, closeMiniCart, navigate, products, homepageContent } = useApp();
   const demoDeals = homepageContent.hotDeals.filter((deal) => deal.active);
+  if (!homepageContent.hotDealsActive || !demoDeals.length) return null;
 
   return (
     <section className="py-16 md:py-20 bg-[#FFFFFF]">
@@ -1592,6 +1821,8 @@ function HotDeals() {
               {(() => {
                 const product = products.find((item) => item.id === deal.productId);
                 if (!product) return null;
+                const currentPrice = product.salePrice ?? product.basePrice;
+                const originalPrice = product.salePrice ?? deal.was;
                 return (
                   <div className="group w-full text-left">
                     <div className="relative mb-3 aspect-[4/5] overflow-hidden rounded-lg bg-[#FFFFFF]">
@@ -1610,8 +1841,8 @@ function HotDeals() {
                       <p className="text-[10px] font-medium tracking-widest uppercase text-[#8A8377] mb-1">{deal.category}</p>
                       <p className="text-[13px] md:text-sm font-semibold text-[#1A1815] group-hover:text-[#A67C3D] transition-colors">{deal.name}</p>
                       <div className="flex items-baseline gap-2 mt-1.5">
-                        <span className="text-[13px] font-medium text-[#1A1815]">{formatPrice(deal.price)}</span>
-                        <span className="text-[11px] text-[#8A8377] line-through">{formatPrice(deal.was)}</span>
+                        <span className="text-[13px] font-medium text-[#1A1815]">{formatPrice(currentPrice)}</span>
+                        {originalPrice > currentPrice && <span className="text-[11px] text-[#8A8377] line-through">{formatPrice(originalPrice)}</span>}
                       </div>
                     </button>
                   </div>
@@ -1746,7 +1977,6 @@ function HomePage() {
     <>
       <HeroSection />
       <CategorySection />
-      <div className="h-px bg-[#DBD5C7] max-w-[1440px] mx-auto" />
       <HotDeals />
       <PreFooterCTA />
       <EditorialBreak />
@@ -1795,9 +2025,7 @@ function matchesMaterial(p: Product, selected: string[]) {
   const haystack = (
     p.name + " " +
     p.description + " " +
-    (p.materials?.join(" ") || "") + " " +
-    (p.fabrics?.map((f) => f.label).join(" ") || "") + " " +
-    (p.legs?.map((l) => l.label).join(" ") || "")
+    (p.materials?.join(" ") || "")
   ).toLowerCase();
   return selected.some((m) => haystack.includes(m.toLowerCase()));
 }
@@ -1811,7 +2039,8 @@ function matchesColor(p: Product, selected: string[]) {
 
 function matchesBadge(p: Product, selected: string[]) {
   if (selected.length === 0) return true;
-  if (selected.includes("sale") && p.salePrice) return true;
+  if (selected.some((id) => p.promotions?.includes(id as "new" | "sale"))) return true;
+  if (selected.includes("sale") && (p.badge === "sale" || p.salePrice)) return true;
   if (selected.includes("new") && p.badge === "new") return true;
   return false;
 }
@@ -1872,20 +2101,22 @@ function ListingPage({ params }: { params?: Record<string, string> }) {
   const [minPrice, setMinPrice] = useState<number>(ABS_MIN);
   const [maxPrice, setMaxPrice] = useState<number>(ABS_MAX);
 
-  const catLabel =
-    cat === "all" ? "All Products" : CATEGORIES.find((c) => c.slug === cat)?.name || "Collection";
+  const matchingSubcategory = products.find((product) => product.subcategorySlug === cat || categoryRouteSlug(product.subcategory) === cat)?.subcategory;
+  const catLabel = cat === "all" ? "All Products" : CATEGORIES.find((c) => c.slug === cat)?.name || matchingSubcategory || "Collection";
 
   // 1. Base category products
   const categoryProducts = products.filter((p) => {
     if (cat === "all") return true;
     if (cat === "sale") return !!p.salePrice;
     if (cat === "new") return p.badge === "new";
-    const norm = p.category.toLowerCase().replace(/[& ]+/g, "-");
-    const subcategory = p.subcategory.toLowerCase();
-    if (cat === "mirrors") return subcategory.includes("mirror");
-    if (cat === "tables") return subcategory.includes("table");
-    if (cat === "shades") return p.category === "Shades" || subcategory.includes("shade");
-    return norm.includes(cat.split("-")[0]);
+    if (matchingSubcategory) return p.subcategorySlug === cat || categoryRouteSlug(p.subcategory) === cat;
+    const requestedDepartment = cat === "lamps" ? "lighting" : cat;
+    if (["lighting", "mirrors", "tables", "shades"].includes(requestedDepartment)) {
+      const storedDepartment = p.categorySlug ?? categoryRouteSlug(p.category);
+      const productDepartment = storedDepartment === "lamps" ? "lighting" : storedDepartment;
+      return productDepartment === requestedDepartment;
+    }
+    return categoryRouteSlug(p.category).includes(cat.split("-")[0]);
   });
   const materialOptions = [...MATERIAL_OPTIONS, ...products.flatMap((p) => p.materials ?? []).filter((material, index, all) => !MATERIAL_OPTIONS.some((item) => item.id.toLowerCase() === material.toLowerCase()) && all.findIndex((x) => x.toLowerCase() === material.toLowerCase()) === index).map((material) => ({ id: material, label: material }))];
   const colorOptions = [...COLOR_OPTIONS, ...products.flatMap((p) => p.swatches).filter((swatch, index, all) => !COLOR_OPTIONS.some((item) => item.id.toLowerCase() === swatch.label.toLowerCase()) && all.findIndex((x) => x.label.toLowerCase() === swatch.label.toLowerCase()) === index).map((swatch) => ({ id: swatch.label, label: swatch.label, hex: swatch.color }))];
@@ -2509,8 +2740,6 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
   const product = matchingProduct || products[0] || PRODUCTS[0];
 
   const [selectedSize, setSelectedSize] = useState(product.sizes?.[1]?.label ?? product.sizes?.[0]?.label);
-  const [selectedFabric, setSelectedFabric] = useState(product.fabrics?.[0]?.label);
-  const [selectedLeg, setSelectedLeg] = useState(product.legs?.[0]?.label);
   const [colorIdx, setColorIdx] = useState(0);
   const [imgIdx, setImgIdx] = useState(0);
   const [quantity, setQuantity] = useState(1);
@@ -2522,7 +2751,7 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
   useEffect(() => {
     let active = true;
     setReviewsLoading(true);
-    fetch(`/api/reviews?product=${encodeURIComponent(product.id)}`, { cache: "no-store" })
+    apiFetch(`/api/reviews?product=${encodeURIComponent(product.id)}`, { cache: "no-store" })
       .then(async (response) => {
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || "Reviews are unavailable.");
@@ -2544,8 +2773,11 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
       </section>
     );
   }
-  const dimensionRows = product.dimensions
-    ? [["Dimensions", product.dimensions]]
+  const selectedDimensions = (selectedSize && product.sizeDimensions?.[selectedSize]) || product.dimensions;
+  const dimensionRows = typeof selectedDimensions === "string" && selectedDimensions
+    ? [["Dimensions", selectedDimensions]]
+    : selectedDimensions && Object.keys(selectedDimensions).length
+    ? Object.entries(selectedDimensions).filter(([, value]) => value).map(([key, value]) => [key === "top" ? "Top" : key.charAt(0).toUpperCase() + key.slice(1), value as string])
     : product.category === "Mirrors"
     ? [["Width", "60 cm"], ["Depth", "4 cm"], ["Height", "90 cm"], ["Frame", "Brushed finish"], ["Weight", "6.5 kg"]]
     : product.category === "Tables"
@@ -2553,8 +2785,8 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
       : product.category === "Shades"
         ? [["Diameter", "30 cm"], ["Height", "22 cm"], ["Fitter", "Standard ring"], ["Fabric", "Linen or cotton"], ["Weight", "0.5 kg"]]
         : [["Width", "28 cm"], ["Depth", "28 cm"], ["Height", "46 cm"], ["Shade", "26 cm diameter"], ["Weight", "2.8 kg"]];
-  const materialRows = product.materials?.length
-    ? [["Materials", product.materials.join(", ")], ["Finish", "Hand-finished surface"], ["Care", "Wipe with a soft dry cloth"], ["Warranty", "1-year quality cover"]]
+  const materialRows = product.materials?.length || (product.materialDetails && Object.values(product.materialDetails).some(Boolean))
+    ? [["Materials", product.materials?.join(", ")], ["Finish", product.materialDetails?.finish || "Hand-finished surface"], ["Assembly", product.materialDetails?.assembly || (product.category === "Tables" ? "Simple home assembly" : "")], ["Care", product.materialDetails?.care || "Wipe with a soft dry cloth"], ["Warranty", product.materialDetails?.warranty || "1-year quality cover"]].filter((row): row is [string, string] => Boolean(row[1]))
     : product.category === "Mirrors"
     ? [["Mirror", "Clear polished glass"], ["Frame", "Brass or solid wood"], ["Mounting", "Wall-ready fittings"], ["Care", "Clean with a soft cloth"], ["Warranty", "1-year quality cover"]]
     : product.category === "Tables"
@@ -2569,17 +2801,13 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
     ? [selectedColorImage, ...galleryImages.filter((image) => image !== selectedColorImage)]
     : galleryImages;
   const basePrice = product.salePrice ?? product.basePrice;
-  const currentPrice = resolvePrice(product, selectedSize, selectedFabric);
-
-  const legDelta = selectedLeg && product.legs ? (product.legs.find((l) => l.label === selectedLeg)?.delta ?? 0) : 0;
-  const totalPrice = currentPrice + legDelta;
+  const currentPrice = resolvePrice(product, selectedSize);
+  const totalPrice = currentPrice;
   const isWished = wishlist.includes(product.id);
 
   const selectedOptions = {
     size: selectedSize,
     color: product.swatches[colorIdx]?.label,
-    fabric: selectedFabric,
-    legFinish: selectedLeg,
     quantity,
     price: totalPrice,
   };
@@ -2615,11 +2843,6 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
     const s = product.sizes.find((x) => x.label === selectedSize);
     if (s && s.delta !== 0) breakdown.push({ label: `${selectedSize} size`, value: s.delta, prefix: "+" });
   }
-  if (selectedFabric && product.fabrics) {
-    const f = product.fabrics.find((x) => x.label === selectedFabric);
-    if (f && f.delta !== 0) breakdown.push({ label: `${selectedFabric} fabric`, value: f.delta, prefix: "+" });
-  }
-  if (legDelta !== 0) breakdown.push({ label: `${selectedLeg} leg finish`, value: legDelta, prefix: "+" });
 
   return (
     <div>
@@ -2647,7 +2870,7 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
               className="relative rounded-lg overflow-hidden bg-[#FFFFFF] mb-4"
               style={{ aspectRatio: "4/5" }}
             >
-              <img src={mockImages[imgIdx]} alt={product.name} className="h-full w-full scale-[1.08] object-cover transition-opacity duration-300" />
+              <img src={mockImages[imgIdx]} srcSet={productImageSrcSet(product, mockImages[imgIdx])} sizes="(max-width: 1024px) 100vw, 50vw" alt={product.name} className="h-full w-full scale-[1.08] object-cover transition-opacity duration-300" />
               {imgIdx > 0 && (
                 <button
                   onClick={() => setImgIdx((i) => i - 1)}
@@ -2681,7 +2904,7 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
                     outlineOffset: 2,
                   }}
                 >
-                  <img src={img} alt="" className="w-full h-full object-cover" />
+                  <img src={img} srcSet={productImageSrcSet(product, img)} sizes="68px" alt="" loading="lazy" className="w-full h-full object-cover" />
                 </button>
               ))}
             </div>
@@ -2718,7 +2941,7 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
               <span className="h-2 w-2 rounded-full bg-[#6F7D5E]" />
               {product.orderType === "in-stock" ? "Available to order" : `Made to order${product.leadTime ? ` · ${product.leadTime} lead time` : ""}`}
             </p>
-            {product.dimensions && <p className="-mt-3 mb-5 text-xs text-[#8A8377]">Dimensions: {product.dimensions}</p>}
+            {dimensionRows.length > 0 && <p className="-mt-3 mb-5 text-xs text-[#8A8377]">Dimensions{selectedSize ? ` (${selectedSize})` : ""}: {dimensionRows.map(([key, value]) => `${key} ${value}`).join(" · ")}</p>}
 
             <div className="h-px bg-[#DBD5C7] mb-6" />
 
@@ -2770,54 +2993,6 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
                         borderColor: colorIdx === i ? "#1A1815" : "#DBD5C7",
                       }}
                     />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Fabric */}
-            {product.fabrics && (
-              <div className="mb-6">
-                <p className="text-[10px] font-medium tracking-widest uppercase text-[#4A463F] mb-3">Fabric</p>
-                <div className="flex flex-wrap gap-2">
-                  {product.fabrics.map((f) => (
-                    <button
-                      key={f.label}
-                      onClick={() => setSelectedFabric(f.label)}
-                      className="px-4 py-2 rounded-[4px] border text-[12px] transition-all duration-150"
-                      style={{
-                        borderColor: selectedFabric === f.label ? "#1A1815" : "#DBD5C7",
-                        backgroundColor: selectedFabric === f.label ? "#1A1815" : "transparent",
-                        color: selectedFabric === f.label ? "#FFFFFF" : "#4A463F",
-                      }}
-                    >
-                      {f.label}
-                      {f.delta > 0 && <span className="ml-1 opacity-55 text-[10px]">+{formatPrice(f.delta)}</span>}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Leg finish */}
-            {product.legs && (
-              <div className="mb-6">
-                <p className="text-[10px] font-medium tracking-widest uppercase text-[#4A463F] mb-3">Leg Finish</p>
-                <div className="flex flex-wrap gap-2">
-                  {product.legs.map((l) => (
-                    <button
-                      key={l.label}
-                      onClick={() => setSelectedLeg(l.label)}
-                      className="px-4 py-2 rounded-[4px] border text-[12px] transition-all duration-150"
-                      style={{
-                        borderColor: selectedLeg === l.label ? "#1A1815" : "#DBD5C7",
-                        backgroundColor: selectedLeg === l.label ? "#1A1815" : "transparent",
-                        color: selectedLeg === l.label ? "#FFFFFF" : "#4A463F",
-                      }}
-                    >
-                      {l.label}
-                      {l.delta > 0 && <span className="ml-1 opacity-55 text-[10px]">+{formatPrice(l.delta)}</span>}
-                    </button>
                   ))}
                 </div>
               </div>
@@ -3012,32 +3187,187 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function CheckoutPage() {
-  const { cart, cartSubtotal, navigate } = useApp();
+  const { cart, cartSubtotal, navigate, clearCart, user, authReady, storeStateReady } = useApp();
   const [done, setDone] = useState(false);
+  const [gatewayReturn, setGatewayReturn] = useState<{ status: "checking" | "paid" | "failed" | "cancelled" | "pending"; orderNumber?: string; riskReview?: boolean } | null>(null);
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [checkoutError, setCheckoutError] = useState("");
+  const [couponCode, setCouponCode] = useState("");
+  const [appliedCoupon, setAppliedCoupon] = useState<{ code: string; discountBdt: number } | null>(null);
+  const [couponMessage, setCouponMessage] = useState("");
+  const [validatingCoupon, setValidatingCoupon] = useState(false);
+  const [rewardInfo, setRewardInfo] = useState<{ pointsBalance: number; settings: { enabled: boolean; redemptionPoints: number; redemptionValueBdt: number } } | null>(null);
+  const [redeemRewards, setRedeemRewards] = useState(false);
+  const [confirmedTotal, setConfirmedTotal] = useState<number | null>(null);
   const [deliveryMethod, setDeliveryMethod] = useState<"standard" | "express">("standard");
   const [paymentMethod, setPaymentMethod] = useState<"card" | "bkash" | "cod">("card");
-  const [details, setDetails] = useState({ name: "", email: "", address: "", city: "", postalCode: "", phone: "", bkashNumber: "" });
-  const orderId = useRef("MN-" + Math.floor(Math.random() * 90000 + 10000));
+  const [details, setDetails] = useState({ name: "", email: "", address: "", city: "", postalCode: "", phone: "" });
+  const [orderId, setOrderId] = useState("");
+  useEffect(() => {
+    if (!storeStateReady) return;
+    const search = new URLSearchParams(window.location.search);
+    if (search.get("payment") !== "return") return;
+    const transactionId = search.get("tran_id") ?? "";
+    if (!/^[A-Za-z0-9_-]{16,30}$/.test(transactionId)) {
+      setGatewayReturn({ status: "pending" });
+      return;
+    }
+    let active = true;
+    let attempts = 0;
+    let timer = 0;
+    setGatewayReturn({ status: "checking" });
+    const check = async () => {
+      attempts += 1;
+      try {
+        const response = await apiFetch(`/api/payments/sslcommerz/status?tran_id=${encodeURIComponent(transactionId)}`, { cache: "no-store" });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error("Payment status is not available yet.");
+        if (!active) return;
+        if (["paid", "failed", "cancelled"].includes(result.status)) {
+          setGatewayReturn({ status: result.status, orderNumber: result.orderNumber, riskReview: result.riskReview === true });
+          if (result.status === "paid") clearCart();
+          return;
+        }
+      } catch { /* IPN and the browser return can arrive in either order. */ }
+      if (active && attempts < 20) timer = window.setTimeout(() => void check(), 2000);
+      else if (active) setGatewayReturn({ status: "pending" });
+    };
+    void check();
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [clearCart, storeStateReady]);
+  useEffect(() => {
+    if (!authReady || !user) { setRewardInfo(null); setRedeemRewards(false); return; }
+    let active = true;
+    apiFetch("/api/customer/rewards", { cache: "no-store" }).then(async (response) => {
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error("Reward balance could not be loaded.");
+      if (active) setRewardInfo(result);
+    }).catch(() => { if (active) setRewardInfo(null); });
+    return () => { active = false; };
+  }, [authReady, user?.id]);
+  useEffect(() => {
+    setAppliedCoupon(null);
+    setCouponMessage("");
+  }, [cartSubtotal]);
   // Prices in this storefront are stored in paisa and formatted as taka.
   const deliveryFee = deliveryMethod === "express" ? 150000 : 0;
-  const orderTotal = cartSubtotal + deliveryFee;
+  const couponDiscountPaisa = appliedCoupon ? Math.min(cartSubtotal, Math.round(appliedCoupon.discountBdt * 100)) : 0;
+  const rewardUnitPoints = rewardInfo?.settings.redemptionPoints ?? 0;
+  const rewardUnitValuePaisa = Math.round((rewardInfo?.settings.redemptionValueBdt ?? 0) * 100);
+  const rewardUnitsAvailable = rewardUnitPoints > 0 ? Math.floor((rewardInfo?.pointsBalance ?? 0) / rewardUnitPoints) : 0;
+  const rewardUnitsBySubtotal = rewardUnitValuePaisa > 0 ? Math.floor(Math.max(0, cartSubtotal - couponDiscountPaisa) / rewardUnitValuePaisa) : 0;
+  const rewardPointsPreview = redeemRewards && rewardInfo?.settings.enabled ? Math.min(rewardUnitsAvailable, rewardUnitsBySubtotal) * rewardUnitPoints : 0;
+  const rewardDiscountPaisa = rewardPointsPreview && rewardUnitPoints ? (rewardPointsPreview / rewardUnitPoints) * rewardUnitValuePaisa : 0;
+  const orderTotal = Math.max(0, cartSubtotal + deliveryFee - couponDiscountPaisa - rewardDiscountPaisa);
   const updateDetail = (field: keyof typeof details, value: string) => setDetails((current) => ({ ...current, [field]: value }));
   const inputClass = "w-full rounded border border-[#DBD5C7] bg-white px-4 py-3 text-sm text-[#1A1815] placeholder:text-[#9A9388] transition-colors focus:border-[#A67C3D] focus:outline-none focus:ring-2 focus:ring-[#A67C3D]/15";
   const sectionTitle = "mb-4 text-xs font-semibold uppercase tracking-[0.16em] text-[#4A463F]";
   const choiceClass = (selected: boolean) => `flex w-full cursor-pointer items-start gap-3 rounded border p-4 transition-colors ${selected ? "border-[#A67C3D] bg-[#FFFFFF]" : "border-[#DBD5C7] bg-white hover:border-[#B9AD98]"}`;
+
+  const applyCoupon = async () => {
+    if (!couponCode.trim() || validatingCoupon) return;
+    setValidatingCoupon(true);
+    setCouponMessage("");
+    setCheckoutError("");
+    try {
+      const response = await apiFetch("/api/coupons/validate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: couponCode, subtotalBdt: cartSubtotal / 100 }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "That coupon could not be applied.");
+      setAppliedCoupon({ code: String(result.code), discountBdt: Number(result.discountBdt) || 0 });
+      setCouponCode(String(result.code));
+      setCouponMessage("Coupon applied. The server will recheck it when you place the order.");
+    } catch (error) {
+      setAppliedCoupon(null);
+      setCouponMessage(error instanceof Error ? error.message : "That coupon could not be applied.");
+    } finally { setValidatingCoupon(false); }
+  };
+
+  const placeOrder = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (placingOrder) return;
+    setPlacingOrder(true);
+    setCheckoutError("");
+    try {
+      const response = await apiFetch(paymentMethod === "cod" ? "/api/orders" : "/api/payments/sslcommerz/init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          customer: { name: details.name, email: details.email, phone: details.phone },
+          shipping: { address: details.address, city: details.city, postalCode: details.postalCode },
+          deliveryMethod,
+          paymentMethod,
+          couponCode: appliedCoupon?.code ?? null,
+          redeemRewards,
+          items: cart.map((item) => ({
+            productId: item.product.id,
+            quantity: item.quantity,
+            options: { size: item.selectedSize ?? null, color: item.selectedColor ?? null, fabric: item.selectedFabric ?? null, legFinish: item.selectedLegFinish ?? null },
+          })),
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "Your order could not be saved. Please try again.");
+      if (paymentMethod !== "cod") {
+        let redirect: URL;
+        try { redirect = new URL(result.redirectUrl); } catch { throw new Error("The payment gateway returned an invalid redirect. Contact the store before retrying."); }
+        if (redirect.protocol !== "https:" || !["sandbox.sslcommerz.com", "securepay.sslcommerz.com"].includes(redirect.hostname)) {
+          throw new Error("The payment gateway returned an untrusted redirect. Contact the store before retrying.");
+        }
+        window.location.assign(redirect.toString());
+        return;
+      }
+      if (typeof result.orderNumber !== "string" || !result.orderNumber) throw new Error("The server did not return an order confirmation. Please contact the store before retrying.");
+      setOrderId(result.orderNumber);
+      setConfirmedTotal(Number.isFinite(Number(result.total)) ? Math.round(Number(result.total) * 100) : orderTotal);
+      clearCart();
+      setDone(true);
+    } catch (error) {
+      setCheckoutError(error instanceof Error ? error.message : "Your order could not be saved. Please try again.");
+    } finally {
+      setPlacingOrder(false);
+    }
+  };
 
   if (done) {
     return (
       <div className="min-h-screen flex items-center justify-center px-8 text-center">
         <div className="max-w-md">
           <div className="w-16 h-16 bg-[#E7EADD] rounded-full flex items-center justify-center mx-auto mb-6"><Check size={26} className="text-[#6F7D5E]" /></div>
-          <h1 className="text-[30px] font-light text-[#1A1815] mb-3" style={{ fontFamily: "'Fraunces', serif" }}>Order confirmed</h1>
-          <p className="text-[13px] text-[#8A8377] mb-2" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{orderId.current}</p>
-          <p className="text-[14px] text-[#4A463F] mb-8 leading-relaxed">Thank you{details.name ? `, ${details.name}` : ""}. Your order details are ready for {details.email}.</p>
-          <p className="mb-7 text-xs leading-5 text-[#8A8377]">Demo checkout only: no payment has been processed and this order has not been sent to a server.</p>
+          <h1 className="text-[30px] font-light text-[#1A1815] mb-3" style={{ fontFamily: "'Fraunces', serif" }}>Order received</h1>
+          <p className="text-[13px] text-[#8A8377] mb-2" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{orderId}</p>
+          <p className="text-[14px] text-[#4A463F] mb-8 leading-relaxed">Thank you{details.name ? `, ${details.name}` : ""}. Your order has been saved for {details.email}.</p>
+          <p className="mb-7 text-xs leading-5 text-[#8A8377]">Order total: {formatPrice(confirmedTotal ?? orderTotal)}. {paymentMethod === "cod" ? "Your order is pending confirmation. Payment is due on delivery." : "Your order is saved with payment pending. The store will contact you to confirm online payment."}</p>
           <button type="button" onClick={() => navigate("home")} className="inline-flex items-center gap-2 bg-[#1A1815] text-[#FFFFFF] text-[11px] font-medium tracking-widest uppercase px-7 py-3.5 rounded-[4px] hover:bg-[#2E2A24] transition-colors">Continue shopping</button>
         </div>
       </div>
+    );
+  }
+
+  if (gatewayReturn) {
+    const paid = gatewayReturn.status === "paid";
+    const finished = paid || gatewayReturn.status === "failed" || gatewayReturn.status === "cancelled";
+    return (
+      <section className="mx-auto flex min-h-[60vh] max-w-2xl flex-col items-center justify-center px-6 py-16 text-center">
+        <div className={`mb-6 flex h-16 w-16 items-center justify-center rounded-full ${paid ? "bg-[#E7EADD]" : "bg-[#F4EFE5]"}`}>
+          {paid ? <Check size={26} className="text-[#6F7D5E]" /> : <ShoppingBag size={25} className="text-[#A67C3D]" />}
+        </div>
+        <h1 className="mb-3 text-3xl font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>
+          {gatewayReturn.status === "checking" ? "Checking your payment" : paid ? "Payment received" : gatewayReturn.status === "failed" ? "Payment was not completed" : gatewayReturn.status === "cancelled" ? "Payment cancelled" : "Payment confirmation pending"}
+        </h1>
+        {gatewayReturn.orderNumber && <p className="mb-3 text-[13px] text-[#8A8377]" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{gatewayReturn.orderNumber}</p>}
+        <p className="mb-7 max-w-lg text-sm leading-6 text-[#68635B]">
+          {paid
+            ? gatewayReturn.riskReview ? "Your payment was received and is awaiting a store review before the order is processed." : "Your payment was verified by the payment provider and your order is confirmed."
+            : gatewayReturn.status === "failed" || gatewayReturn.status === "cancelled" ? "The payment was not completed. Your bag is still saved so you can try again."
+              : "The provider has not confirmed the result yet. Your bag remains saved while the server waits for its verified payment notification."}
+        </p>
+        {!finished && <button type="button" onClick={() => window.location.reload()} className="mb-4 rounded border border-[#DBD5C7] px-5 py-3 text-[10px] font-semibold uppercase tracking-widest text-[#4A463F]">Check again</button>}
+        <button type="button" onClick={() => navigate(paid ? "home" : "cart")} className="inline-flex items-center gap-2 rounded bg-[#1A1815] px-7 py-3.5 text-[11px] font-medium uppercase tracking-widest text-white transition-colors hover:bg-[#2E2A24]">{paid ? "Continue shopping" : "Return to your bag"}</button>
+      </section>
     );
   }
 
@@ -3061,7 +3391,7 @@ function CheckoutPage() {
           <h1 className="text-4xl font-light text-[#1A1815] sm:text-5xl" style={{ fontFamily: "'Fraunces', serif" }}>Checkout</h1>
         </div>
 
-        <form onSubmit={(event) => { event.preventDefault(); setDone(true); }} className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-14">
+        <form onSubmit={placeOrder} className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-14">
           <div className="space-y-8 sm:space-y-10">
             <section className="border-b border-[#DBD5C7] pb-8 sm:pb-10" aria-labelledby="checkout-contact-heading">
               <h2 id="checkout-contact-heading" className={sectionTitle}>1. Contact</h2>
@@ -3101,8 +3431,22 @@ function CheckoutPage() {
               </div>
             </fieldset>
 
+            <section className="border-b border-[#DBD5C7] pb-8 sm:pb-10" aria-labelledby="checkout-discounts-heading">
+              <h2 id="checkout-discounts-heading" className={sectionTitle}>5. Discounts and rewards</h2>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <label className="flex-1"><span className="sr-only">Coupon code</span><input value={couponCode} onChange={(event) => { setCouponCode(event.target.value.toUpperCase()); setAppliedCoupon(null); setCouponMessage(""); }} placeholder="Coupon code" autoComplete="off" className={inputClass} /></label>
+                <button type="button" onClick={() => void applyCoupon()} disabled={validatingCoupon || !couponCode.trim()} className="min-h-10 rounded border border-[#DBD5C7] px-5 text-[10px] font-semibold uppercase tracking-widest text-[#4A463F] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50">{validatingCoupon ? "Checking..." : appliedCoupon ? "Apply again" : "Apply coupon"}</button>
+              </div>
+              {couponMessage && <p role="status" className={`mt-2 text-xs ${appliedCoupon ? "text-[#587052]" : "text-[#8f493b]"}`}>{couponMessage}</p>}
+              {authReady && user && rewardInfo?.settings.enabled && rewardInfo.pointsBalance > 0 && <label className="mt-4 flex cursor-pointer items-start gap-3 rounded border border-[#DBD5C7] bg-white p-4 text-xs text-[#4A463F]">
+                <input type="checkbox" checked={redeemRewards} onChange={(event) => setRedeemRewards(event.target.checked)} className="mt-0.5 accent-[#A67C3D]" />
+                <span>Use my {rewardInfo.pointsBalance.toLocaleString()} available points{rewardPointsPreview > 0 ? ` for ${formatPrice(rewardDiscountPaisa)} off` : ""}. Points are rechecked atomically when the order is placed.</span>
+              </label>}
+              {!user && <p className="mt-3 text-xs text-[#8A8377]">Sign in to use Cloud Rewards points.</p>}
+            </section>
+
             <fieldset>
-              <legend className={sectionTitle}>4. Payment</legend>
+              <legend className={sectionTitle}>6. Payment</legend>
               <div className="grid gap-2.5 sm:grid-cols-3">
                 {([
                   { id: "card", label: "Credit / debit card" },
@@ -3116,12 +3460,12 @@ function CheckoutPage() {
                   </label>;
                 })}
               </div>
-              {paymentMethod === "bkash" && <label className="mt-3 block"><span className="sr-only">bKash account phone number</span><input required autoComplete="tel" type="tel" inputMode="tel" value={details.bkashNumber} onChange={(event) => updateDetail("bkashNumber", event.target.value)} placeholder="bKash account phone number" className={inputClass} /></label>}
-              <p className="mt-3 text-xs leading-5 text-[#8A8377]">{paymentMethod === "cod" ? "Pay in cash when your order arrives." : paymentMethod === "bkash" ? "bKash payment is shown for checkout preview. No payment will be collected in this demo." : "Card payment is shown for checkout preview. No card details are requested or charged in this demo."}</p>
+              <p className="mt-3 text-xs leading-5 text-[#8A8377]">{paymentMethod === "cod" ? "Pay in cash when your order arrives." : "Visa, Mastercard, and bKash payments will use the configured secure hosted gateway. Card details are entered only on the gateway page."}</p>
             </fieldset>
 
-            <button type="submit" className="flex w-full items-center justify-center gap-2 rounded bg-[#1A1815] px-6 py-4 text-[11px] font-medium uppercase tracking-[0.15em] text-white transition-colors hover:bg-[#332D24] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A67C3D] focus-visible:ring-offset-2">Place order <span aria-hidden="true">—</span> {formatPrice(orderTotal)} <ArrowRight size={14} /></button>
-            <p className="text-center text-[11px] leading-5 text-[#8A8377]">Demo checkout: this confirms the order on screen only. No payment is processed and no order is sent to a server.</p>
+            {checkoutError && <p role="alert" className="rounded border border-[#d7aaa0] bg-[#fff5f0] px-3 py-2 text-xs leading-5 text-[#8f493b]">{checkoutError}</p>}
+            <button type="submit" disabled={placingOrder} className="flex w-full items-center justify-center gap-2 rounded bg-[#1A1815] px-6 py-4 text-[11px] font-medium uppercase tracking-[0.15em] text-white transition-colors hover:bg-[#332D24] disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A67C3D] focus-visible:ring-offset-2">{placingOrder ? "Preparing checkout…" : paymentMethod === "cod" ? "Place order" : "Continue to secure payment"} <span aria-hidden="true">—</span> {formatPrice(orderTotal)} <ArrowRight size={14} /></button>
+            <p className="text-center text-[11px] leading-5 text-[#8A8377]">Online payment is confirmed only after the provider validates the transaction with the backend.</p>
           </div>
 
           <aside className="h-fit rounded-lg border border-[#DBD5C7] bg-white p-5 shadow-[0_12px_36px_rgba(70,54,29,0.06)] sm:p-6 lg:sticky lg:top-28" aria-labelledby="checkout-summary-heading">
@@ -3129,9 +3473,9 @@ function CheckoutPage() {
             <div className="mb-5 max-h-[360px] space-y-4 overflow-y-auto pr-1">
               {cart.map((item) => (
                 <div key={item.id} className="flex gap-3">
-                  <div className="relative h-[68px] w-[60px] shrink-0 overflow-visible"><div className="h-full w-full overflow-hidden rounded border border-[#FFFFFF] bg-[#FFFFFF]"><img src={item.product.images.silo} alt={item.product.name} onError={handleImgError} className="h-full w-full object-cover" /></div><span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#1A1815] px-1 text-[10px] text-white">{item.quantity}</span></div>
+                  <div className="relative h-[68px] w-[60px] shrink-0 overflow-visible"><div className="h-full w-full overflow-hidden rounded border border-[#FFFFFF] bg-[#FFFFFF]"><img src={item.product.images.silo} srcSet={item.product.images.siloSrcSet} sizes="60px" alt={item.product.name} onError={handleImgError} loading="lazy" className="h-full w-full object-cover" /></div><span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#1A1815] px-1 text-[10px] text-white">{item.quantity}</span></div>
                   <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
-                    <div className="min-w-0"><p className="text-xs font-medium leading-snug text-[#1A1815]">{item.product.name}</p>{(item.selectedColor || item.selectedSize || item.selectedFabric || item.selectedLeg) && <p className="mt-1 text-[11px] text-[#8A8377]">{[item.selectedSize, item.selectedColor, item.selectedFabric, item.selectedLeg].filter(Boolean).join(" · ")}</p>}</div>
+                    <div className="min-w-0"><p className="text-xs font-medium leading-snug text-[#1A1815]">{item.product.name}</p>{(item.selectedColor || item.selectedSize || item.selectedFabric || item.selectedLegFinish) && <p className="mt-1 text-[11px] text-[#8A8377]">{[item.selectedSize, item.selectedColor, item.selectedFabric, item.selectedLegFinish].filter(Boolean).join(" · ")}</p>}</div>
                     <p className="shrink-0 text-xs font-medium text-[#1A1815]">{formatPrice(item.price * item.quantity)}</p>
                   </div>
                 </div>
@@ -3139,6 +3483,8 @@ function CheckoutPage() {
             </div>
             <div className="space-y-3 border-t border-[#DBD5C7] pt-4">
               <div className="flex justify-between text-sm text-[#68635B]"><span>Subtotal</span><span className="font-medium text-[#1A1815]">{formatPrice(cartSubtotal)}</span></div>
+              {couponDiscountPaisa > 0 && appliedCoupon && <div className="flex justify-between text-sm text-[#587052]"><span>Coupon ({appliedCoupon.code})</span><span>−{formatPrice(couponDiscountPaisa)}</span></div>}
+              {rewardDiscountPaisa > 0 && <div className="flex justify-between text-sm text-[#587052]"><span>Reward points ({rewardPointsPreview.toLocaleString()})</span><span>−{formatPrice(rewardDiscountPaisa)}</span></div>}
               <div className="flex justify-between text-sm text-[#68635B]"><span>{deliveryMethod === "express" ? "Express delivery" : "Standard delivery"}</span><span className="font-medium text-[#1A1815]">{deliveryFee ? formatPrice(deliveryFee) : "Free"}</span></div>
               <div className="flex justify-between border-t border-[#DBD5C7] pt-3 text-base font-semibold text-[#1A1815]"><span>Total</span><span>{formatPrice(orderTotal)}</span></div>
             </div>
@@ -3276,7 +3622,7 @@ function CustomProductRequest() {
       form.set("website", values.website || "");
       images.forEach(({ file }) => form.append("photos", file));
 
-      const response = await fetch("/api/custom-requests", { method: "POST", body: form });
+      const response = await apiFetch("/api/custom-requests", { method: "POST", body: form });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "We could not send your request. Please try again.");
       setSubmittedNumber(result.requestNumber ? `CR-${result.requestNumber}` : "");
@@ -3446,7 +3792,7 @@ function SearchOverlay() {
                     className="w-full flex items-center gap-4 py-3 hover:bg-[#FFFFFF] px-3 -mx-3 rounded-lg transition-colors text-left group"
                   >
                     <div className="w-11 h-13 rounded-[6px] overflow-hidden bg-[#FFFFFF] shrink-0" style={{ height: 52 }}>
-                      <img src={p.images.silo} alt={p.name} className="w-full h-full object-cover" />
+                  <img src={p.images.silo} srcSet={p.images.siloSrcSet} sizes="44px" alt={p.name} loading="lazy" className="w-full h-full object-cover" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-[13px] font-semibold text-[#1A1815] truncate">{p.name}</p>
@@ -3558,7 +3904,7 @@ function CartPage() {
                     className="h-32 w-28 shrink-0 overflow-hidden rounded bg-[#FFFFFF] md:h-40 md:w-32"
                     aria-label={`View ${item.product.name}`}
                   >
-                    <img src={item.product.images.silo} alt={item.product.name} onError={handleImgError} className="h-full w-full object-cover" />
+                    <img src={item.product.images.silo} srcSet={item.product.images.siloSrcSet} sizes="(max-width: 768px) 112px, 128px" alt={item.product.name} onError={handleImgError} loading="lazy" className="h-full w-full object-cover" />
                   </button>
                   <div className="flex min-w-0 flex-1 flex-col justify-between gap-4 sm:flex-row">
                     <div>
@@ -3566,8 +3912,8 @@ function CartPage() {
                       <button onClick={() => navigate("product", { id: item.product.id })} className="text-left text-sm font-semibold text-[#1A1815] hover:text-[#A67C3D]">
                         {item.product.name}
                       </button>
-                      {(item.selectedColor || item.selectedSize || item.selectedFabric || item.selectedLeg) && (
-                        <p className="mt-2 text-xs text-[#8A8377]">{[item.selectedSize, item.selectedColor, item.selectedFabric, item.selectedLeg].filter(Boolean).join(" · ")}</p>
+                      {(item.selectedColor || item.selectedSize || item.selectedFabric || item.selectedLegFinish) && (
+                        <p className="mt-2 text-xs text-[#8A8377]">{[item.selectedSize, item.selectedColor, item.selectedFabric, item.selectedLegFinish].filter(Boolean).join(" · ")}</p>
                       )}
                       <button type="button" onClick={() => removeFromCart(item.id)} className="mt-4 text-[10px] uppercase tracking-widest text-[#8A8377] underline underline-offset-4 hover:text-[#1A1815]">
                         Remove
@@ -3672,6 +4018,8 @@ function WishlistPage() {
                     >
                       <img
                         src={product.images.silo}
+                        srcSet={product.images.siloSrcSet}
+                        sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
                         alt={product.name}
                         onError={handleImgError}
                         className="absolute inset-0 w-full h-full scale-[1.12] object-cover transition-transform duration-500 group-hover:scale-[1.16]"
@@ -3773,13 +4121,24 @@ function MobileBottomNav() {
 }
 
 type AccountRoute = "account" | "login" | "register" | "forgot-password" | "reset-password";
+type CustomerOrder = { id: string; order_number: number; placed_at: string; status: string; payment_status: string; payment_method: string | null; total_bdt: number; courier_tracking_code: string | null; courier_status: string; courier_return_status: string | null; courier_message: string | null; courier_updated_at: string | null; order_status_events: { id: string; from_status: string | null; to_status: string; created_at: string; note: string | null }[]; order_items: { product_name: string; quantity: number }[] };
+type CustomerCustomRequest = { id: string; request_number: number; status: string; quoted_price_bdt: number | null; created_at: string; custom_request_status_events: { id: string; from_status: string | null; to_status: string; created_at: string; note: string | null }[] };
+
+function normalizeCustomerPhone(value: string) {
+  const digits = value.replace(/\D/g, "");
+  if (/^01[3-9]\d{8}$/.test(digits)) return `+880${digits.slice(1)}`;
+  if (/^8801[3-9]\d{8}$/.test(digits)) return `+${digits}`;
+  throw new Error("Enter a valid Bangladesh mobile number, such as 01712345678.");
+}
 
 function AccountAuthPage() {
   const { currentPage, user, authReady, signOut, navigate } = useApp();
   const supabase = createSupabaseBrowserClient();
   const route = currentPage.name as AccountRoute;
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [authStep, setAuthStep] = useState<"form" | "signup-otp" | "recovery-otp" | "recovery-password">("form");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [pending, setPending] = useState(false);
@@ -3787,8 +4146,18 @@ function AccountAuthPage() {
   const [notice, setNotice] = useState("");
   const [resetComplete, setResetComplete] = useState(false);
   const [confirmationIssue, setConfirmationIssue] = useState(false);
+  const [customerOrders, setCustomerOrders] = useState<CustomerOrder[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersError, setOrdersError] = useState("");
+  const [customerRequests, setCustomerRequests] = useState<CustomerCustomRequest[]>([]);
+  const [requestsError, setRequestsError] = useState("");
   const configured = Boolean(supabase);
-  const title = route === "register" ? "Create your account" : route === "forgot-password" ? "Reset your password" : route === "reset-password" ? "Choose a new password" : "Welcome back";
+  const isPasswordUpdate = route === "reset-password" || authStep === "recovery-password";
+  const isRecoveryRequest = route === "forgot-password";
+  const isRegistration = route === "register";
+  const isOtpStep = authStep === "signup-otp" || authStep === "recovery-otp";
+  const isSignIn = !isRegistration && !isRecoveryRequest && !isPasswordUpdate;
+  const title = isRegistration ? authStep === "signup-otp" ? "Verify your mobile number" : "Create your account" : isRecoveryRequest ? isPasswordUpdate ? "Choose a new password" : authStep === "recovery-otp" ? "Verify your mobile number" : "Reset your password" : isPasswordUpdate ? "Choose a new password" : "Welcome back";
   const inputClass = "w-full rounded-md border border-[#DBD5C7] bg-white px-4 py-3 text-sm text-[#1A1815] placeholder:text-[#9A9388] outline-none transition focus:border-[#A67C3D] focus:ring-2 focus:ring-[#A67C3D]/15";
 
   useEffect(() => {
@@ -3796,8 +4165,38 @@ function AccountAuthPage() {
   }, [route]);
 
   useEffect(() => {
-    if (authReady && user && (route === "login" || route === "register")) navigate("account");
-  }, [authReady, user, route, navigate]);
+    if (authReady && user && !pending && authStep === "form" && (route === "login" || route === "register")) navigate("account");
+  }, [authReady, user, pending, authStep, route, navigate]);
+
+  useEffect(() => {
+    if (route !== "account" || !user) return;
+    let active = true;
+    setOrdersLoading(true);
+    apiFetch("/api/customer/orders", { cache: "no-store" })
+      .then(async (response) => {
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "Your orders could not be loaded.");
+        return (result.orders ?? []) as CustomerOrder[];
+      })
+      .then((orders) => { if (active) { setCustomerOrders(orders); setOrdersError(""); } })
+      .catch((reason) => { if (active) setOrdersError(reason instanceof Error ? reason.message : "Your orders could not be loaded."); })
+      .finally(() => { if (active) setOrdersLoading(false); });
+    return () => { active = false; };
+  }, [route, user]);
+
+  useEffect(() => {
+    if (route !== "account" || !user) return;
+    let active = true;
+    apiFetch("/api/customer/custom-requests", { cache: "no-store" })
+      .then(async (response) => {
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "Your custom requests could not be loaded.");
+        return (result.requests ?? []) as CustomerCustomRequest[];
+      })
+      .then((requests) => { if (active) { setCustomerRequests(requests); setRequestsError(""); } })
+      .catch((reason) => { if (active) setRequestsError(reason instanceof Error ? reason.message : "Your custom requests could not be loaded."); });
+    return () => { active = false; };
+  }, [route, user]);
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -3806,40 +4205,79 @@ function AccountAuthPage() {
     setError("");
     setNotice("");
     try {
-      if (route === "register") {
+      if (isRegistration && authStep === "signup-otp") {
+        if (!/^\d{6}$/.test(otp)) throw new Error("Enter the 6-digit code sent to your phone.");
+        const { error: authError } = await supabase.auth.verifyOtp({ phone, token: otp, type: "sms" });
+        if (authError) throw authError;
+        navigate("account");
+      } else if (isRegistration) {
+        const normalizedPhone = normalizeCustomerPhone(phone);
         if (password.length < 8) throw new Error("Choose a password with at least 8 characters.");
         if (password !== confirmPassword) throw new Error("Your passwords do not match.");
-        const callback = new URL("/auth/callback", window.location.origin);
-        callback.searchParams.set("next", "/account");
+        setPhone(normalizedPhone);
         const { data, error: authError } = await supabase.auth.signUp({
-          email: email.trim(),
+          phone: normalizedPhone,
           password,
-          options: { emailRedirectTo: callback.toString(), data: { full_name: name.trim() } },
+          options: { data: { full_name: name.trim() } },
         });
         if (authError) throw authError;
-        if (data.session) navigate("account");
-        else setNotice("Your account is ready. Check your email to confirm your address, then sign in.");
-      } else if (route === "forgot-password") {
-        const callback = new URL("/auth/callback", window.location.origin);
-        callback.searchParams.set("next", "/reset-password");
-        const { error: authError } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: callback.toString() });
+        if (data.session) {
+          const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
+          if (signOutError) throw signOutError;
+          const { error: otpError } = await supabase.auth.signInWithOtp({ phone: normalizedPhone, options: { shouldCreateUser: false } });
+          if (otpError) throw otpError;
+        }
+        setAuthStep("signup-otp");
+        setNotice("Enter the 6-digit code sent by SMS to verify your mobile number.");
+      } else if (isRecoveryRequest && authStep === "recovery-otp") {
+        if (!/^\d{6}$/.test(otp)) throw new Error("Enter the 6-digit code sent to your phone.");
+        const { error: authError } = await supabase.auth.verifyOtp({ phone, token: otp, type: "sms" });
         if (authError) throw authError;
-        setNotice("If an account exists for that email, a password reset link is on its way.");
-      } else if (route === "reset-password") {
+        setAuthStep("recovery-password");
+        setPassword("");
+        setConfirmPassword("");
+        setNotice("Your number is verified. Choose a new password.");
+      } else if (isRecoveryRequest && authStep === "form") {
+        const normalizedPhone = normalizeCustomerPhone(phone);
+        setPhone(normalizedPhone);
+        const { error: authError } = await supabase.auth.signInWithOtp({
+          phone: normalizedPhone,
+          options: { shouldCreateUser: false },
+        });
+        if (authError) throw authError;
+        setAuthStep("recovery-otp");
+        setNotice("If an account is registered with this number, an OTP has been sent. Enter it to continue.");
+      } else if (isPasswordUpdate) {
         if (password.length < 8) throw new Error("Choose a password with at least 8 characters.");
         if (password !== confirmPassword) throw new Error("Your passwords do not match.");
         const { error: authError } = await supabase.auth.updateUser({ password });
         if (authError) throw authError;
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "local" });
         setResetComplete(true);
         setNotice("Your password has been updated. Sign in with your new password.");
       } else {
-        const { error: authError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        const normalizedPhone = normalizeCustomerPhone(phone);
+        const { error: authError } = await supabase.auth.signInWithPassword({ phone: normalizedPhone, password });
         if (authError) throw authError;
         navigate("account");
       }
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "We couldn’t complete that request. Please try again.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const resendOtp = async () => {
+    if (!supabase || !phone) return;
+    setPending(true);
+    setError("");
+    try {
+      const { error: authError } = await supabase.auth.signInWithOtp({ phone, options: { shouldCreateUser: false } });
+      if (authError) throw authError;
+      setNotice("A new verification code has been sent.");
+    } catch (resendError) {
+      setError(resendError instanceof Error ? resendError.message : "A new code could not be sent.");
     } finally {
       setPending(false);
     }
@@ -3853,12 +4291,31 @@ function AccountAuthPage() {
         <h1 className="mb-8 text-4xl font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>Welcome, {displayName}</h1>
         <div className="rounded-xl border border-[#DBD5C7] bg-white p-6 sm:p-8">
           <p className="mb-2 text-xs font-medium uppercase tracking-widest text-[#8A8377]">Signed in as</p>
-          <p className="text-sm text-[#1A1815]">{user.email}</p>
+          <p className="text-sm text-[#1A1815]">{user.phone || user.email || "Customer account"}</p>
           <div className="mt-7 flex flex-wrap gap-3">
             <button type="button" onClick={() => navigate("listing")} className="rounded bg-[#1A1815] px-5 py-3 text-[10px] font-medium uppercase tracking-widest text-white transition hover:bg-[#332D24]">Continue shopping</button>
             <button type="button" onClick={async () => { try { await signOut(); navigate("home"); } catch (signOutError) { setError(signOutError instanceof Error ? signOutError.message : "Sign out failed."); } }} className="rounded border border-[#DBD5C7] px-5 py-3 text-[10px] font-medium uppercase tracking-widest text-[#4A463F] transition hover:border-[#A67C3D]">Sign out</button>
           </div>
           {error && <p role="alert" className="mt-4 text-sm text-[#A33E34]">{error}</p>}
+        </div>
+        <div className="mt-8 rounded-xl border border-[#DBD5C7] bg-white p-6 sm:p-8">
+          <h2 className="mb-5 text-xl font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>Your orders</h2>
+          {ordersError && <p role="alert" className="mb-4 text-sm text-[#A33E34]">{ordersError}</p>}
+          {ordersLoading && <p className="text-sm text-[#8A8377]">Loading your orders…</p>}
+          {!ordersLoading && !ordersError && customerOrders.length === 0 && <p className="text-sm text-[#8A8377]">No orders yet.</p>}
+          <div className="space-y-4">{customerOrders.map((order) => <article key={order.id} className="border-t border-[#eee9e0] pt-4 text-sm">
+            <div className="flex flex-wrap items-baseline justify-between gap-2"><p className="font-medium text-[#1A1815]">Order CL-{order.order_number}</p><p className="text-xs text-[#8A8377]">{new Date(order.placed_at).toLocaleDateString("en-BD", { year: "numeric", month: "short", day: "numeric" })}</p></div>
+            <p className="mt-1 text-xs capitalize text-[#716a60]">{order.status} · {order.payment_status}</p>
+            {order.order_status_events?.length > 0 && <ol className="mt-3 space-y-1 border-l border-[#DBD5C7] pl-3 text-[10px] text-[#8A8377]">{[...order.order_status_events].sort((a, b) => a.created_at.localeCompare(b.created_at)).map((event) => <li key={event.id}><span className="font-medium capitalize text-[#4A463F]">{event.to_status}</span> · {new Date(event.created_at).toLocaleDateString("en-BD", { year: "numeric", month: "short", day: "numeric" })}</li>)}</ol>}
+            <p className="mt-2 text-xs text-[#716a60]">{(order.order_items ?? []).map((item) => `${item.product_name} × ${item.quantity}`).join(", ")}</p>
+            {order.courier_tracking_code && <div className="mt-3 rounded-lg bg-[#f8f6f2] p-3 text-xs"><p className="font-medium capitalize text-[#48443d]">Steadfast: {order.courier_status.replaceAll("_", " ")}</p><p className="mt-1 font-mono text-[#8d6437]">Tracking code {order.courier_tracking_code}</p>{order.courier_updated_at && <p className="mt-1 text-[10px] text-[#8A8377]">Last courier update {new Date(order.courier_updated_at).toLocaleString("en-BD")}</p>}{order.courier_return_status && <p className="mt-1 text-[#716a60]">Return request: {order.courier_return_status.replaceAll("_", " ")}</p>}{order.courier_message && <p className="mt-1 text-[#716a60]">{order.courier_message}</p>}</div>}
+          </article>)}</div>
+        </div>
+        <div className="mt-5 rounded-xl border border-[#DBD5C7] bg-white p-6 sm:p-8">
+          <h2 className="mb-5 text-xl font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>Your custom requests</h2>
+          {requestsError && <p role="alert" className="mb-4 text-sm text-[#A33E34]">{requestsError}</p>}
+          {!requestsError && customerRequests.length === 0 && <p className="text-sm text-[#8A8377]">No custom requests yet.</p>}
+          <div className="space-y-4">{customerRequests.map((request) => <article key={request.id} className="border-t border-[#eee9e0] pt-4 text-sm"><div className="flex flex-wrap items-baseline justify-between gap-2"><p className="font-medium text-[#1A1815]">Request CR-{request.request_number}</p><p className="text-xs text-[#8A8377]">{new Date(request.created_at).toLocaleDateString("en-BD", { year: "numeric", month: "short", day: "numeric" })}</p></div><p className="mt-1 text-xs capitalize text-[#716a60]">Status: {request.status.replaceAll("_", " ")}{request.quoted_price_bdt != null ? ` · Quote ${formatPrice(Math.round(Number(request.quoted_price_bdt) * 100))}` : ""}</p>{request.custom_request_status_events?.length > 0 && <ol className="mt-3 space-y-1 border-l border-[#DBD5C7] pl-3 text-[10px] text-[#8A8377]">{[...request.custom_request_status_events].sort((a, b) => a.created_at.localeCompare(b.created_at)).map((event) => <li key={event.id}><span className="font-medium capitalize text-[#4A463F]">{event.to_status}</span> · {new Date(event.created_at).toLocaleDateString("en-BD", { year: "numeric", month: "short", day: "numeric" })}{event.note ? ` · ${event.note}` : ""}</li>)}</ol>}</article>)}</div>
         </div>
       </section>
     );
@@ -3867,11 +4324,6 @@ function AccountAuthPage() {
   if (route === "account" && !authReady) {
     return <div className="flex min-h-[60vh] items-center justify-center text-sm text-[#8A8377]">Loading your account…</div>;
   }
-
-  const isRegistration = route === "register";
-  const isRecoveryRequest = route === "forgot-password";
-  const isPasswordUpdate = route === "reset-password";
-  const isSignIn = !isRegistration && !isRecoveryRequest && !isPasswordUpdate;
 
   return (
     <section className="mx-auto grid min-h-[calc(100vh-92px)] max-w-[1240px] items-center gap-8 px-5 py-10 sm:px-8 lg:grid-cols-[0.9fr_1.1fr] lg:gap-16 lg:px-10 lg:py-16">
@@ -3888,20 +4340,21 @@ function AccountAuthPage() {
       <div className="mx-auto w-full max-w-md rounded-xl border border-[#E5DFD3] bg-white p-6 shadow-[0_18px_55px_rgba(26,24,21,0.07)] sm:p-9">
         <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.18em] text-[#A67C3D]">Customer account</p>
         <h1 className="mb-2 text-3xl font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>{title}</h1>
-        <p className="mb-7 text-sm leading-6 text-[#777168]">{isRegistration ? "Create an account to keep your details together for next time." : isRecoveryRequest ? "Enter your account email and we’ll send a secure reset link." : isPasswordUpdate ? "Choose a new password for your account." : "Sign in to your Cloud Lamps & Mirrors account."}</p>
+        <p className="mb-7 text-sm leading-6 text-[#777168]">{isRegistration ? authStep === "signup-otp" ? `Enter the 6-digit code sent to ${phone}.` : "Create an account with your mobile number and a password." : isRecoveryRequest ? isPasswordUpdate ? "Choose a new password for your account." : authStep === "recovery-otp" ? `Enter the 6-digit code sent to ${phone}.` : "Enter your mobile number and we’ll send a verification code by SMS." : isPasswordUpdate ? "Choose a new password for your account." : "Sign in with your mobile number and password."}</p>
 
         {!configured && <p role="status" className="mb-5 rounded-md border border-[#D9C79E] bg-[#FAF5E9] p-3 text-xs leading-5 text-[#695632]">Supabase is not configured yet. Add your project URL and publishable key to <code>.env.local</code>, then restart the development server.</p>}
-        {confirmationIssue && <p role="alert" className="mb-4 text-xs text-[#A33E34]">That email confirmation link could not be completed. Please try registering again or request a fresh link.</p>}
+        {confirmationIssue && <p role="alert" className="mb-4 text-xs text-[#A33E34]">That confirmation link could not be completed. Please request a new verification code.</p>}
         {error && <p role="alert" className="mb-4 rounded-md bg-[#F9ECE8] p-3 text-xs leading-5 text-[#A33E34]">{error}</p>}
         {notice && <p role="status" className="mb-4 rounded-md bg-[#EDF1E8] p-3 text-xs leading-5 text-[#506044]">{notice}</p>}
 
         {!resetComplete && <form onSubmit={submit} className="space-y-4">
-          {isRegistration && <label className="block"><span className="mb-1.5 block text-xs font-medium text-[#4A463F]">Full name</span><input required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} className={inputClass} placeholder="Your name" /></label>}
-          {!isPasswordUpdate && <label className="block"><span className="mb-1.5 block text-xs font-medium text-[#4A463F]">Email address</span><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className={inputClass} placeholder="you@example.com" /></label>}
-          {!isRecoveryRequest && <label className="block"><span className="mb-1.5 block text-xs font-medium text-[#4A463F]">{isPasswordUpdate ? "New password" : "Password"}</span><input required minLength={8} type="password" autoComplete={isRegistration || isPasswordUpdate ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} className={inputClass} placeholder="At least 8 characters" /></label>}
-          {(isRegistration || isPasswordUpdate) && <label className="block"><span className="mb-1.5 block text-xs font-medium text-[#4A463F]">Confirm password</span><input required minLength={8} type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} className={inputClass} placeholder="Enter your password again" /></label>}
+          {isRegistration && authStep === "form" && <label className="block"><span className="mb-1.5 block text-xs font-medium text-[#4A463F]">Full name</span><input required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} className={inputClass} placeholder="Your name" /></label>}
+          {!isPasswordUpdate && !isOtpStep && <label className="block"><span className="mb-1.5 block text-xs font-medium text-[#4A463F]">Mobile number</span><input required type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={(event) => setPhone(event.target.value)} className={inputClass} placeholder="01712345678" /></label>}
+          {isOtpStep && <><input type="hidden" name="phone" value={phone} /><label className="block"><span className="mb-1.5 block text-xs font-medium text-[#4A463F]">6-digit SMS code</span><input required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))} className={`${inputClass} text-center tracking-[0.35em]`} placeholder="000000" /></label></>}
+          {!isOtpStep && (!isRecoveryRequest || isPasswordUpdate) && <label className="block"><span className="mb-1.5 block text-xs font-medium text-[#4A463F]">{isPasswordUpdate ? "New password" : "Password"}</span><input required minLength={8} type="password" autoComplete={isRegistration || isPasswordUpdate ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} className={inputClass} placeholder="At least 8 characters" /></label>}
+          {(isPasswordUpdate || (isRegistration && authStep === "form")) && <label className="block"><span className="mb-1.5 block text-xs font-medium text-[#4A463F]">Confirm password</span><input required minLength={8} type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} className={inputClass} placeholder="Enter your password again" /></label>}
           <button type="submit" disabled={pending || !configured} className="flex w-full items-center justify-center gap-2 rounded bg-[#1A1815] px-5 py-3.5 text-[10px] font-medium uppercase tracking-[0.16em] text-white transition hover:bg-[#332D24] disabled:cursor-not-allowed disabled:opacity-50">
-            {pending ? "Please wait…" : isRegistration ? "Create account" : isRecoveryRequest ? "Send reset link" : isPasswordUpdate ? "Save new password" : "Sign in"} {!pending && <ArrowRight size={13} />}
+            {pending ? "Please wait…" : isOtpStep ? "Verify code" : isRegistration ? "Create account" : isRecoveryRequest ? isPasswordUpdate ? "Save new password" : "Send verification code" : isPasswordUpdate ? "Save new password" : "Sign in"} {!pending && <ArrowRight size={13} />}
           </button>
         </form>}
 
@@ -3909,6 +4362,7 @@ function AccountAuthPage() {
           {isSignIn && <button type="button" onClick={() => navigate("forgot-password")} className="underline underline-offset-4 transition hover:text-[#A67C3D]">Forgot your password?</button>}
           {isSignIn && <p>New here? <button type="button" onClick={() => navigate("register")} className="font-medium text-[#8D642D] underline underline-offset-4">Create an account</button></p>}
           {isRegistration && <p>Already have an account? <button type="button" onClick={() => navigate("login")} className="font-medium text-[#8D642D] underline underline-offset-4">Sign in</button></p>}
+          {isOtpStep && <><button type="button" disabled={pending} onClick={() => void resendOtp()} className="font-medium text-[#8D642D] underline underline-offset-4 disabled:opacity-50">Resend code</button><button type="button" onClick={() => { setAuthStep("form"); setOtp(""); setNotice(""); setError(""); }} className="underline underline-offset-4">Use a different number</button></>}
           {(isRecoveryRequest || isPasswordUpdate || resetComplete) && <button type="button" onClick={() => navigate("login")} className="font-medium text-[#8D642D] underline underline-offset-4">Back to sign in</button>}
         </div>
       </div>
@@ -3918,7 +4372,7 @@ function AccountAuthPage() {
 
 function AppInner() {
   const { currentPage } = useApp();
-  const headerOffset = 92;
+  const headerOffset = 96;
 
   return (
     <div className="min-h-screen bg-[#FFFFFF]">

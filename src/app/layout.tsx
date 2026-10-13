@@ -7,8 +7,8 @@ export const metadata: Metadata = {
   description:
     "Explore thoughtfully selected lamps, mirrors, shades, and tables from Cloud Lamps & Mirrors.",
   robots: {
-    index: false,
-    follow: false,
+    index: true,
+    follow: true,
   },
 };
 

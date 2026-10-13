@@ -2,14 +2,14 @@ import { createClient } from "@supabase/supabase-js";
 
 const [userId] = process.argv.slice(2);
 const projectUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serverKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const serverKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!userId || !/^[0-9a-f-]{36}$/i.test(userId)) {
   console.error("Usage: node --env-file=.env.local scripts/grant-admin.mjs <user-id>");
   process.exit(1);
 }
 if (!projectUrl || !serverKey) {
-  console.error("Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the root .env.local first.");
+  console.error("Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY (or the legacy SUPABASE_SERVICE_ROLE_KEY) in the root .env.local first.");
   process.exit(1);
 }
 

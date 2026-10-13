@@ -1,25 +1,29 @@
 # Store admin and Supabase feature guide
 
-This project uses Next.js for the storefront and server routes, Supabase Auth for customer and admin sessions, Postgres for structured store data, and Supabase Storage for product and homepage imagery. This is the current application boundary; a separate Node.js backend can replace or extend the route handlers later.
+This project uses Next.js for the storefront, a standalone Node.js API for `/api/*` requests when `NEXT_PUBLIC_BACKEND_URL` is set, Supabase Auth for customer and admin sessions, Postgres for store data, and Supabase Storage for product and homepage imagery. The Next.js route handlers remain a fallback for the routes they implement when the backend URL is blank.
 
 ## Store admin (`/admin`)
 
 ### Connected features
 
-- **Products:** create and edit products; save drafts; publish and archive products; assign one of the fixed departments and a subcategory; manage SKU, descriptions, selling and original BDT prices, unit cost, inventory, made-to-order status and lead time, dimensions, size/fabric/leg price adjustments, searchable materials, and image galleries. Each colour finish stores its label, swatch colour, and optional finish-specific image. Selecting a finish on `/products/{slug}` changes the gallery to that image. Published database products are returned by `/api/catalog`.
-- **Homepage content:** edit or hide individual hero slides, top category cards, and hot deal cards; replace images by HTTPS URL or upload; edit image alt text; update hero copy and collection target; edit category name and collection slug; select a hot deal product and edit its card label and displayed prices. The existing images and copy are the defaults. The storefront uses them until an administrator saves an override.
+- **Products:** create and edit products; save drafts; publish and archive products; permanently delete products without order or review history; assign one of the fixed departments and a subcategory; manage SKU, descriptions, selling and original BDT prices, unit cost, inventory, made-to-order status and lead time, structured dimensions, size price adjustments, searchable materials and Materials-tab details, New Arrivals/Hot Deals collection tags, colour swatches, and image galleries. Products with history must be archived to preserve records. Each colour finish stores its label, swatch colour, and optional finish-specific image. Selecting a finish on `/products/{slug}` changes the gallery to that image. With Supabase connected successfully, active database products are authoritative; archived products do not reappear from local fallback data.
+- **Homepage content:** add, edit, hide, and remove hero slides, top category cards, New Arrivals products, and Hot Deals cards. New Arrivals is rendered on the landing page and features active products from the catalogue; upload product imagery in Products and select those products here. Hot Deals cards link to catalogue products, upload or replace card imagery, and display the current price from the linked product so it matches cart and checkout pricing. Admins can restore the starter selections. Limits are 10 hero slides, 12 category cards, 30 New Arrivals products, and 30 Hot Deals cards. Homepage settings are stored in `store_settings`; the storefront refreshes after successful admin saves.
+- **Categories:** load fixed departments and their database subcategories; add, rename, or remove subcategories. Renames preserve the saved slug while the storefront updates displayed names, navigation links, and product filters. Removal is blocked while a product is assigned. The fixed top-level departments cannot be renamed or removed; once Supabase is authoritative, a department with no subcategories stays empty rather than showing demo links.
 - **Media storage:** product and homepage uploads go to the public `store-media` bucket. Public read access is intentional for storefront images. Storage upload, update, and delete policies require the trusted admin claim.
 - **Customer reviews:** the admin can load reviews and set them to pending, published, or hidden. Published reviews are visible to customers; customers must be signed in to submit a review.
 - **Custom requests:** the customer request form submits through `/api/custom-requests`; the admin inbox reads requests and protected reference images and supports review/status handling.
+- **Orders and checkout:** checkout re-reads prices and validates options and inventory on the server, then calls a transactional Postgres RPC to write orders and lines and reserve stock. Coupons and signed-in reward redemption are checked and recorded atomically; delivered eligible orders earn points, and cancellation/refund transitions restore stock and reverse coupon/reward entries. Visa, Mastercard, and bKash use SSLCOMMERZ Hosted Checkout when merchant credentials and public callbacks are configured. Gateway callbacks and IPN are independently validated for transaction ID, amount, BDT currency, status, and risk before payment state changes.
+- **Customer persistence:** guest carts and wishlists stay in browser storage. Signed-in carts and wishlists also sync to the customer's own row in Postgres and merge when a guest signs in.
+- **Overview and customers:** overview sales/order/customer totals and the customer directory read Supabase orders, profiles, and Auth users.
+- **Coupons and rewards:** admins can manage coupon records and programme settings and see issued, redeemed, spendable, and reversed-point totals. Checkout previews discounts, then validates redemption under database locks to prevent overspending.
+- **Store profile:** admins can read and save the store profile in `store_settings`.
 
 ### Preview or not yet connected
 
-- Overview sales figures, order samples, and customer samples are demonstration data. The **Sales & profit** analytics page reads its monthly and yearly report from real Supabase orders.
-- Orders are represented in the schema, but checkout does not yet create trusted database orders or process payments. Sales reports remain empty until a trusted checkout/backend workflow writes order and line-item records.
-- Categories show fixed departments and seeded subcategories. The add-subcategory dialog is still a preview.
-- Coupons, rewards, most store settings, and the media library controls are previews rather than complete CRUD workflows.
+- Online card and bKash charging requires an SSLCOMMERZ merchant account, server-only credentials, and a public HTTPS backend callback/IPN URL. Until those are configured and a sandbox transaction is completed, the gateway cannot be exercised from this workspace.
+- Signed-in admin workflows still require a live session for an account whose trusted `app_metadata.role` is `admin`; I cannot use your browser's active sign-in here. No production/test order was created during these changes.
 
-The admin interface can be opened without a claim, but all write APIs and Supabase row/storage policies enforce administrator access. To administer data, sign in with a user whose trusted `app_metadata.role` is `admin`.
+The admin interface can be opened without a claim, but protected APIs and Supabase row/storage policies enforce administrator access. To administer data, sign in with a user whose trusted `app_metadata.role` is `admin`.
 
 ## Supabase data model
 
@@ -55,13 +59,13 @@ The migration adds `products.cost_price_bdt`, `order_items.unit_cost_bdt`, and t
 - Customers can read and update only their own profile and read their own order/reward records, subject to the table policies.
 - Admin database and storage policies check the signed JWT's trusted `app_metadata.role = "admin"` claim. Do not grant admin through user-editable `user_metadata` or browser code.
 - Server routes verify the current Supabase user and admin claim before product or homepage writes.
-- Keep the service-role key server-side. It bypasses RLS and must never use a `NEXT_PUBLIC_` name.
+- Keep the Supabase secret key server-side. It bypasses RLS and must never use a `NEXT_PUBLIC_` name; the legacy service-role key is supported as a fallback.
 
 ## Setup and activation
 
-1. Copy `.env.example` to `.env.local`; set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. Set `SUPABASE_SERVICE_ROLE_KEY` only for trusted server workflows that need it.
-  2. Apply migrations in order: `20261008000000_store_admin_schema.sql`, `20261009000000_product_customer_reviews.sql`, `20261010000000_seed_storefront_products.sql`, `20261011000000_homepage_content.sql`, `20261012000000_product_cost_profit.sql`, then `20261013000000_product_image_variants.sql` and `20261014000000_checkout_order_rpc.sql` if using the standalone Node API's optimized responsive images and transactional checkout.
+1. Copy `.env.example` to `.env.local`; set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. Set `SUPABASE_SECRET_KEY` only for trusted server workflows that need it; the legacy `SUPABASE_SERVICE_ROLE_KEY` remains supported.
+2. Apply migrations in order: `20261008000000_store_admin_schema.sql`, `20261009000000_product_customer_reviews.sql`, `20261010000000_seed_storefront_products.sql`, `20261011000000_homepage_content.sql`, `20261012000000_product_cost_profit.sql`, `20261013000000_product_image_variants.sql`, `20261014000000_checkout_order_rpc.sql`, `20261015000000_database_integrity_guards.sql`, and `20261016000000_customer_checkout_features.sql`.
 3. Set `app_metadata.role = "admin"` for the intended account using the Supabase Admin API from a trusted server or one-time script, then refresh that user's session.
 4. Restart `npm run dev`, open `/admin`, and use **Products** and **Homepage content**. Product settings and homepage overrides persist in Postgres; uploaded images are stored in Supabase Storage.
 
-If no Supabase project environment is configured, the site keeps its local product and homepage defaults. Homepage edits cannot be persisted and product admin APIs report that Supabase is not configured. The migrations in this repository are prepared but must be applied to the intended Supabase project.
+If no Supabase project environment is configured, the site keeps its local product and homepage defaults. The seed migration inserts 17 starter products and their sample images with `ON CONFLICT DO NOTHING`; it does not overwrite existing product rows. Migration `20261016000000_customer_checkout_features.sql` creates per-user storefront state and payment records, replaces the transactional order function for coupons/rewards, adds payment settlement functions and seeds homepage defaults only if no saved homepage row exists. Once Supabase returns successfully, active database rows become authoritative, so admin archives stay archived instead of resurfacing as local samples. The user-provided prior CLI output showed the remote was up to date before this migration was added; apply the new migration after reviewing its dry run. The latest prior read-only findings are recorded in [admin-panel-setup.md](admin-panel-setup.md).

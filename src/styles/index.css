@@ -9,6 +9,24 @@
 
 .storefront-page-enter { animation: storefront-page-arrive 360ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 
+.home-header-bar { height: 68px; }
+.home-header-bar.home-header-bar-scrolled { height: 62px; }
+
+.admin-panel aside,
+.admin-panel header { border-color: #e5e5e5; }
+.admin-panel [class*="bg-[#bd8547]"],
+.admin-panel [class*="bg-[#252723]"] { background-color: #171717 !important; }
+.admin-panel [class*="bg-[#e9d9c3]"] { background-color: #b8b8b8 !important; }
+.admin-panel [class*="hover:bg-[#d1af82]"]:hover { background-color: #777777 !important; }
+.admin-panel [class*="text-[#805d35]"],
+.admin-panel [class*="text-[#805e37]"],
+.admin-panel [class*="text-[#9b6b38]"],
+.admin-panel [class*="text-[#8d6437]"],
+.admin-panel [class*="text-[#a77b47]"],
+.admin-panel [class*="text-[#aa7940]"],
+.admin-panel [class*="text-[#9b7547]"] { color: #333333 !important; }
+.admin-panel [class*="border-[#bd8547]"] { border-color: #171717 !important; }
+
 ::selection { color: #1A1815; background: #E7D7BD; }
 
 :focus-visible { outline: 2px solid #A67C3D; outline-offset: 3px; }
@@ -114,12 +132,15 @@ html { scroll-behavior: smooth; }
   }
 }
 @media (max-width: 767px) {
+  .home-header-bar { height: 66px; }
+  .home-header-bar.home-header-bar-scrolled { height: 60px; }
+
   .home-header-utility {
     display: none !important;
   }
 
   .mobile-nav-main {
-    padding-top: 64px !important;
+    padding-top: 66px !important;
     padding-bottom: calc(40px + env(safe-area-inset-bottom)) !important;
   }
 

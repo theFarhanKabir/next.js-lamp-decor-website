@@ -13,7 +13,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Standalone Node.js API
 
-The separate API for products, admin work, orders, and optimized images is in [`backend/`](backend/README.md). It targets Node.js 24.21 LTS and is deliberately not connected to the Next.js app or Supabase yet. Follow its setup guide when you are ready to connect it; its Supabase environment values are blank by default.
+The standalone API for catalogue, admin, checkout, orders, and media is in [`backend/`](backend/README.md). It targets Node.js 24.21 LTS and reads the Supabase settings from this project's private `.env.local`. Set `NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:4000`, then run `npm run dev` from both the project root and `backend/` in separate terminals. See the [backend guide](backend/README.md) for API details and current feature limits.
 
 ## Customer accounts
 
@@ -24,9 +24,9 @@ Email registration, sign-in, email confirmation, password reset, and persistent 
 3. In Supabase **Authentication → URL Configuration**, set the Site URL to `http://localhost:3000` and add `http://localhost:3000/auth/callback` to the Redirect URLs. Add your deployed site URL and its `/auth/callback` URL before production.
 4. Restart `npm run dev` after changing environment variables.
 
-The custom request form and admin inbox also require the Supabase migration in `supabase/migrations/` and `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`. Never put the service-role key in a `NEXT_PUBLIC_*` variable. See [the admin setup guide](docs/admin-panel-setup.md).
+The custom request form and admin inbox also require the Supabase migrations in `supabase/migrations/` and a server-only `SUPABASE_SECRET_KEY` in `.env.local` (the legacy `SUPABASE_SERVICE_ROLE_KEY` is also accepted). Never put a secret key in a `NEXT_PUBLIC_*` variable. See [the admin setup guide](docs/admin-panel-setup.md).
 
-The public publishable key is intended for browser use; never add a Supabase service-role key to `NEXT_PUBLIC_*` variables. Supabase's default email sender is suitable for trying the flow; configure custom SMTP before relying on registration and password-reset emails in production.
+The public publishable key is intended for browser use; never add a Supabase secret or service-role key to `NEXT_PUBLIC_*` variables. Supabase's default email sender is suitable for trying the flow; configure custom SMTP before relying on registration and password-reset emails in production.
 
 ## Routes
 

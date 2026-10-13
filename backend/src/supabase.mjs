@@ -37,7 +37,11 @@ export async function verifyAccessToken(accessToken) {
 }
 
 export async function requireUser(request) {
-  const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const headers = request?.headers;
+  const authorization = typeof headers?.get === "function"
+    ? headers.get("authorization")
+    : headers?.authorization ?? headers?.Authorization;
+  const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
   if (!token) return { error: { status: 401, message: "Sign in to continue." } };
   if (!hasSupabaseAuth) return { error: { status: 503, message: "Authentication is not connected yet." } };
   const user = await verifyAccessToken(token);

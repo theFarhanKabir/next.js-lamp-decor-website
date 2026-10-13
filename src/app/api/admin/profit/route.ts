@@ -5,7 +5,7 @@ type ProfitItem = { unit_cost_bdt: number | string | null; quantity: number; lin
 type ProfitOrder = { placed_at: string; order_items: ProfitItem[] };
 
 export async function GET(request: Request) {
-  const supabase = await createClient();
+  const supabase = await createClient({ admin: true });
   if (!supabase) return NextResponse.json({ error: "Supabase is not configured." }, { status: 503 });
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Sign in with an administrator account." }, { status: 401 });

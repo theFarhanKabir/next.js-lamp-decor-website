@@ -3,7 +3,8 @@ const unsplash = (photo: string, width: number) => `https://images.unsplash.com/
 export type HeroSlide = { image: string; alt: string; eyebrow: string; headline: string; subtext: string; ctaLabel: string; categorySlug: string; active: boolean };
 export type HomeCategory = { name: string; image: string; alt: string; slug: string; active: boolean };
 export type HotDeal = { productId: string; name: string; category: string; price: number; was: number; image: string; alt: string; active: boolean };
-export type HomepageContent = { heroSlides: HeroSlide[]; categories: HomeCategory[]; hotDeals: HotDeal[] };
+export type NewArrivalsContent = { title: string; eyebrow: string; productIds: string[]; active: boolean };
+export type HomepageContent = { heroSlides: HeroSlide[]; categories: HomeCategory[]; hotDeals: HotDeal[]; hotDealsActive: boolean; newArrivals: NewArrivalsContent };
 
 export const DEFAULT_HOMEPAGE_CONTENT: HomepageContent = {
   heroSlides: [
@@ -36,4 +37,6 @@ export const DEFAULT_HOMEPAGE_CONTENT: HomepageContent = {
     { productId: "nora-table-lamp", name: "Nora Glass Table Lamp", category: "Table Lamps", price: 48000, was: 59000, image: unsplash("photo-1616486029423-aaa4789e8c9a", 700), alt: "Glass table lamp", active: true },
     { productId: "noor-velvet-shade", name: "Noor Velvet Lampshade", category: "Lamp Shades", price: 26000, was: 32000, image: unsplash("photo-1505693416388-ac5ce068fe85", 700), alt: "Velvet lampshade", active: true },
   ],
+  hotDealsActive: true,
+  newArrivals: { title: "New Arrivals", eyebrow: "Just arrived", productIds: ["milo-console-table", "ellery-full-length-mirror", "oslo-side-table", "cleo-wall-sconce", "solene-wall-mirror"], active: true },
 };

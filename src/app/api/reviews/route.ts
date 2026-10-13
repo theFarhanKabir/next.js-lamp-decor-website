@@ -1,6 +1,5 @@
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
-import { PRODUCTS } from "../../catalog";
 import { createClient as createSessionClient } from "../../../lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -13,7 +12,7 @@ function errorResponse(message: string, status: number) {
 
 function createServiceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return null;
   return createSupabaseClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 }
@@ -30,7 +29,7 @@ function validOrigin(request: Request) {
 }
 
 async function requireAdmin() {
-  const session = await createSessionClient();
+  const session = await createSessionClient({ admin: true });
   if (!session) return { error: errorResponse("Supabase is not configured.", 503) };
   const { data: { user }, error } = await session.auth.getUser();
   if (error || user?.app_metadata?.role !== "admin") return { error: errorResponse("Admin access is required.", 403) };
@@ -53,9 +52,17 @@ export async function GET(request: Request) {
   }
 
   const slug = url.searchParams.get("product")?.trim() ?? "";
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 120 || !PRODUCTS.some((product) => product.id === slug)) return errorResponse("A valid product is required.", 400);
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 120) return errorResponse("A valid product is required.", 400);
   const session = await createSessionClient();
   if (!session) return errorResponse("Supabase is not configured.", 503);
+  const { data: product, error: productError } = await session
+    .from("products")
+    .select("id")
+    .eq("slug", slug)
+    .eq("status", "active")
+    .maybeSingle();
+  if (productError) return errorResponse("Could not verify this product. Apply the latest Supabase migration and try again.", 500);
+  if (!product) return errorResponse("This product is not available for reviews.", 404);
   const { data, error } = await session
     .from("reviews")
     .select("id, product_slug, customer_name, rating, title, body, created_at")
@@ -85,23 +92,25 @@ export async function POST(request: Request) {
   const title = typeof values.title === "string" ? values.title.trim() : "";
   const body = typeof values.body === "string" ? values.body.trim() : "";
   const rating = Number(values.rating);
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 120 || !PRODUCTS.some((product) => product.id === slug)) return errorResponse("A valid product is required.", 400);
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 120) return errorResponse("A valid product is required.", 400);
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) return errorResponse("Choose a rating from 1 to 5 stars.", 400);
   if (title.length > 100) return errorResponse("Keep the review title under 100 characters.", 400);
   if (body.length < 10 || body.length > 3000) return errorResponse("Write between 10 and 3,000 characters for your review.", 400);
 
-  const service = createServiceClient();
-  let productId: string | null = null;
-  if (service) {
-    const { data: product } = await service.from("products").select("id").eq("slug", slug).maybeSingle();
-    productId = product?.id ?? null;
-  }
+  const { data: product, error: productError } = await session
+    .from("products")
+    .select("id")
+    .eq("slug", slug)
+    .eq("status", "active")
+    .maybeSingle();
+  if (productError) return errorResponse("Could not verify this product. Apply the latest Supabase migration and try again.", 500);
+  if (!product) return errorResponse("This product is not available for reviews.", 404);
   const name = typeof user.user_metadata.full_name === "string" && user.user_metadata.full_name.trim()
     ? user.user_metadata.full_name.trim().slice(0, 120)
     : (user.email?.split("@")[0] || "Customer").slice(0, 120);
 
   const { data, error } = await session.from("reviews").insert({
-    product_id: productId,
+    product_id: product.id,
     product_slug: slug,
     customer_id: user.id,
     customer_name: name,

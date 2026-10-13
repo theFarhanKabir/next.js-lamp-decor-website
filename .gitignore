@@ -6,6 +6,7 @@ coverage/
 *.tsbuildinfo
 .freebuff/
 .vercel/
+supabase/.temp/
 .env*
 !.env.example
 *.log

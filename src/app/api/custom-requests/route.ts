@@ -10,7 +10,7 @@ const acceptedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function createServiceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return null;
   return createSupabaseClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 }
@@ -20,7 +20,7 @@ function errorResponse(message: string, status: number) {
 }
 
 export async function GET() {
-  const sessionClient = await createSessionClient();
+  const sessionClient = await createSessionClient({ admin: true });
   if (!sessionClient) return errorResponse("Supabase is not configured.", 503);
 
   const { data: { user }, error: authError } = await sessionClient.auth.getUser();
@@ -31,7 +31,7 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from("custom_requests")
-    .select("id, request_number, full_name, phone, email, city_area, delivery_address, description, status, created_at, custom_request_images(id, file_name, storage_path, sort_order)")
+    .select("id, request_number, full_name, phone, email, city_area, delivery_address, description, status, admin_note, quoted_price_bdt, created_at, custom_request_status_events(id,from_status,to_status,actor_email,note,created_at), custom_request_images(id, file_name, storage_path, sort_order)")
     .order("created_at", { ascending: false });
 
   if (error) return errorResponse("Could not load custom requests. Apply the latest Supabase migration and try again.", 500);
@@ -46,6 +46,33 @@ export async function GET() {
   }));
 
   return NextResponse.json({ requests });
+}
+
+export async function PATCH(request: Request) {
+  const sessionClient = await createSessionClient({ admin: true });
+  if (!sessionClient) return errorResponse("Supabase is not configured.", 503);
+  const { data: { user }, error: authError } = await sessionClient.auth.getUser();
+  if (authError || !user) return errorResponse("Sign in with an administrator account.", 401);
+  if (user.app_metadata?.role !== "admin") return errorResponse("Administrator access is required.", 403);
+  const service = createServiceClient();
+  if (!service) return errorResponse("The server Supabase service key is not configured.", 503);
+  let body: Record<string, unknown>;
+  try { body = await request.json(); } catch { return errorResponse("Invalid request body.", 400); }
+  const id = typeof body.id === "string" ? body.id : "";
+  const status = typeof body.status === "string" ? body.status : "";
+  const statuses = ["new", "reviewing", "quoted", "completed", "declined", "pending", "confirmed", "processing", "shipped", "delivered", "cancelled"];
+  if (!/^[0-9a-f-]{36}$/i.test(id) || !statuses.includes(status)) return errorResponse("Choose a valid custom request and status.", 400);
+  const quote = body.quoted_price_bdt == null || body.quoted_price_bdt === "" ? null : Number(body.quoted_price_bdt);
+  if (quote !== null && (!Number.isFinite(quote) || quote < 0 || quote > 100000000)) return errorResponse("Enter a valid quote amount in BDT.", 400);
+  const note = typeof body.admin_note === "string" ? body.admin_note.trim().slice(0, 4000) || null : null;
+  const { data, error } = await service.rpc("admin_change_custom_request_status", {
+    p_request_id: id, p_status: status, p_actor_user_id: user.id,
+    p_actor_email: user.email ?? "Admin", p_note: note, p_quoted_price_bdt: quote,
+  });
+  if (error?.code === "P0002") return errorResponse(error.message, 404);
+  if (error?.code === "22023") return errorResponse(error.message, 409);
+  if (error) return errorResponse("The custom request status could not be updated. Apply the latest Supabase migration and try again.", 500);
+  return NextResponse.json({ ok: true, request: data });
 }
 
 export async function POST(request: Request) {
