@@ -28,6 +28,8 @@ The custom request form and admin inbox also require the Supabase migrations in 
 
 The public publishable key is intended for browser use; never add a Supabase secret or service-role key to `NEXT_PUBLIC_*` variables. Supabase's default email sender is suitable for trying the flow; configure custom SMTP before relying on registration and password-reset emails in production.
 
+Phone sign-up and recovery send SMS through MiMSMS using a Supabase Send SMS Auth Hook. Configure the server-only MiMSMS and hook secrets in `.env.local`, then complete the provider, IP/domain whitelist, and HTTPS hook setup in [the backend guide](backend/README.md).
+
 ## Routes
 
 - `/` - home

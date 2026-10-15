@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { createClient as createSupabaseBrowserClient } from "../lib/supabase/client";
 import { apiFetch } from "../lib/api";
@@ -839,7 +840,7 @@ function ProductCard({ product, index = 0 }: { product: Product; index?: number 
 
           {/* Action row */}
           <div
-            className="absolute inset-x-0 bottom-0 z-10 transition-transform duration-300 ease-out"
+            className="product-card-desktop-actions absolute inset-x-0 bottom-0 z-10 transition-transform duration-300 ease-out"
             style={{ transform: hovered ? "translateY(0)" : "translateY(100%)" }}
           >
             <div className="bg-gradient-to-t from-black/45 to-transparent pt-8 pb-3 px-3">
@@ -880,6 +881,29 @@ function ProductCard({ product, index = 0 }: { product: Product; index?: number 
               </div>
             </div>
           </div>
+          <div className="product-card-mobile-actions absolute bottom-2 left-2 right-3 z-20 items-center gap-2">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                addToCart(product, { color: product.swatches[swatchIdx]?.label });
+                closeMiniCart();
+                navigate("checkout");
+              }}
+              className="flex min-h-8 flex-1 items-center justify-center rounded-full bg-[#1A1815] px-2.5 text-[10px] font-medium text-white shadow-sm active:bg-[#3A3530] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            >
+              Buy Now
+            </button>
+            <button
+              type="button"
+              aria-label={`Add ${product.name} to cart`}
+              title="Add to cart"
+              onClick={(e) => { e.stopPropagation(); addToCart(product, { color: product.swatches[swatchIdx]?.label }); }}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#E7E7EB] text-[#1A1815] shadow-sm transition-colors active:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            >
+              <Plus size={16} strokeWidth={2} />
+            </button>
+          </div>
         </div>
 
         {/* Info */}
@@ -900,11 +924,6 @@ function ProductCard({ product, index = 0 }: { product: Product; index?: number 
           <span className="text-[14px] font-medium text-[#1A1815]" style={{ fontVariantNumeric: "tabular-nums" }}>
             {formatPrice(displayPrice)}
           </span>
-          {product.salePrice && (
-            <span className="text-[12px] text-[#8A8377] line-through" style={{ fontVariantNumeric: "tabular-nums" }}>
-              {formatPrice(product.basePrice)}
-            </span>
-          )}
         </div>
       </div>
     </Reveal>
@@ -1822,7 +1841,6 @@ function HotDeals() {
                 const product = products.find((item) => item.id === deal.productId);
                 if (!product) return null;
                 const currentPrice = product.salePrice ?? product.basePrice;
-                const originalPrice = product.salePrice ?? deal.was;
                 return (
                   <div className="group w-full text-left">
                     <div className="relative mb-3 aspect-[4/5] overflow-hidden rounded-lg bg-[#FFFFFF]">
@@ -1830,11 +1848,29 @@ function HotDeals() {
                       <img src={deal.image} alt={deal.alt || deal.name} onError={handleImgError} className="absolute inset-0 h-full w-full scale-[1.12] object-cover transition-transform duration-500 group-hover:scale-[1.16]" />
                         <span className="absolute top-3 left-3 rounded-full bg-[#A64C3C] px-3 py-1.5 text-[9px] font-semibold tracking-wider uppercase text-white">Hot deal</span>
                       </button>
-                      <div className="absolute inset-x-0 bottom-0 z-10 translate-y-full bg-gradient-to-t from-black/45 to-transparent px-3 pb-3 pt-12 transition-transform duration-300 group-hover:translate-y-0 group-focus-within:translate-y-0">
+                      <div className="product-card-desktop-actions absolute inset-x-0 bottom-0 z-10 translate-y-full bg-gradient-to-t from-black/45 to-transparent px-3 pb-3 pt-12 transition-transform duration-300 group-hover:translate-y-0 group-focus-within:translate-y-0">
                         <div className="flex gap-2">
                           <button type="button" onClick={() => addToCart(product)} className="flex-1 rounded-full bg-white/90 px-2 py-2 text-[10px] font-medium text-[#1A1815] transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">Add to Cart</button>
                           <button type="button" onClick={() => { addToCart(product); closeMiniCart(); navigate("checkout"); }} className="flex-1 rounded-full bg-[#1A1815] px-2 py-2 text-[10px] font-medium text-white transition-colors hover:bg-[#3A3530] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">Buy Now</button>
                         </div>
+                      </div>
+                      <div className="product-card-mobile-actions absolute bottom-2 left-2 right-3 z-20 items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { addToCart(product); closeMiniCart(); navigate("checkout"); }}
+                          className="flex min-h-8 flex-1 items-center justify-center rounded-full bg-[#1A1815] px-2.5 text-[10px] font-medium text-white shadow-sm active:bg-[#3A3530] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                        >
+                          Buy Now
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Add ${product.name} to cart`}
+                          title="Add to cart"
+                          onClick={() => addToCart(product)}
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#E7E7EB] text-[#1A1815] shadow-sm transition-colors active:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                        >
+                          <Plus size={16} strokeWidth={2} />
+                        </button>
                       </div>
                     </div>
                     <button type="button" onClick={() => navigate("product", { id: product.id })} className="w-full text-left">
@@ -1842,7 +1878,6 @@ function HotDeals() {
                       <p className="text-[13px] md:text-sm font-semibold text-[#1A1815] group-hover:text-[#A67C3D] transition-colors">{deal.name}</p>
                       <div className="flex items-baseline gap-2 mt-1.5">
                         <span className="text-[13px] font-medium text-[#1A1815]">{formatPrice(currentPrice)}</span>
-                        {originalPrice > currentPrice && <span className="text-[11px] text-[#8A8377] line-through">{formatPrice(originalPrice)}</span>}
                       </div>
                     </button>
                   </div>
@@ -2081,14 +2116,32 @@ function ListingPage({ params }: { params?: Record<string, string> }) {
     }, 220);
   };
 
+  useEffect(() => () => {
+    if (mobileFilterCloseTimer.current) clearTimeout(mobileFilterCloseTimer.current);
+  }, []);
+
   useEffect(() => {
     if (!mobileFilterOpen) return;
-    const previousOverflow = document.body.style.overflow;
+    const scrollY = window.scrollY;
+    const bodyStyle = document.body.style;
+    const previousStyles = {
+      overflow: bodyStyle.overflow,
+      position: bodyStyle.position,
+      top: bodyStyle.top,
+      width: bodyStyle.width,
+    };
     document.body.style.overflow = "hidden";
+    bodyStyle.position = "fixed";
+    bodyStyle.top = `-${scrollY}px`;
+    bodyStyle.width = "100%";
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") closeMobileFilters(); };
     document.addEventListener("keydown", onKeyDown);
     return () => {
-      document.body.style.overflow = previousOverflow;
+      bodyStyle.overflow = previousStyles.overflow;
+      bodyStyle.position = previousStyles.position;
+      bodyStyle.top = previousStyles.top;
+      bodyStyle.width = previousStyles.width;
+      window.scrollTo(0, scrollY);
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [mobileFilterOpen]);
@@ -2676,8 +2729,8 @@ function ListingPage({ params }: { params?: Record<string, string> }) {
       </div>
 
       {/* Mobile Filter Drawer */}
-      {mobileFilterOpen && (
-        <div className={`fixed inset-0 z-[200] flex lg:hidden ${mobileFilterClosing ? "mobile-filter-overlay-closing" : "mobile-filter-overlay-opening"}`}>
+      {mobileFilterOpen && createPortal((
+        <div className={`fixed inset-0 z-[200] flex items-end lg:hidden ${mobileFilterClosing ? "mobile-filter-overlay-closing" : "mobile-filter-overlay-opening"}`}>
           {/* Backdrop */}
           <div
             className="absolute inset-0 bg-black/25"
@@ -2685,7 +2738,7 @@ function ListingPage({ params }: { params?: Record<string, string> }) {
             onClick={closeMobileFilters}
           />
           {/* Drawer content */}
-          <section role="dialog" aria-modal="true" aria-labelledby="mobile-filter-title" className={`mobile-filter-drawer relative flex h-full min-h-0 w-80 max-w-[88vw] flex-col overflow-hidden bg-[#FFFFFF] shadow-[16px_0_48px_rgba(0,0,0,0.35)] ${mobileFilterClosing ? "mobile-filter-drawer-closing" : "mobile-filter-drawer-opening"}`}>
+          <section role="dialog" aria-modal="true" aria-labelledby="mobile-filter-title" className={`mobile-filter-drawer relative flex h-[min(92vh,780px)] max-h-[92dvh] min-h-0 w-full flex-col overflow-hidden rounded-t-2xl bg-[#FFFFFF] shadow-[0_-16px_48px_rgba(0,0,0,0.2)] ${mobileFilterClosing ? "mobile-filter-drawer-closing" : "mobile-filter-drawer-opening"}`}>
             <div className="flex shrink-0 items-center justify-between border-b border-[#DBD5C7] p-5">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal size={17} className="text-[#1A1815]" />
@@ -2703,7 +2756,7 @@ function ListingPage({ params }: { params?: Record<string, string> }) {
               </button>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-3" style={{ scrollbarWidth: "thin", WebkitOverflowScrolling: "touch" }}>{renderFilterSidebar()}</div>
+            <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-5 py-3" style={{ scrollbarWidth: "thin", WebkitOverflowScrolling: "touch", overscrollBehaviorY: "contain" }}>{renderFilterSidebar()}</div>
 
             <div className="grid shrink-0 grid-cols-2 gap-3 border-t border-[#DBD5C7] bg-[#FFFFFF] px-5 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
               <button
@@ -2723,7 +2776,7 @@ function ListingPage({ params }: { params?: Record<string, string> }) {
             </div>
           </section>
         </div>
-      )}
+      ), document.body)}
 
       <Footer />
     </div>
@@ -3200,9 +3253,18 @@ function CheckoutPage() {
   const [redeemRewards, setRedeemRewards] = useState(false);
   const [confirmedTotal, setConfirmedTotal] = useState<number | null>(null);
   const [deliveryMethod, setDeliveryMethod] = useState<"standard" | "express">("standard");
-  const [paymentMethod, setPaymentMethod] = useState<"card" | "bkash" | "cod">("card");
+  const [paymentMethod, setPaymentMethod] = useState<"bkash" | "cod">("bkash");
   const [details, setDetails] = useState({ name: "", email: "", address: "", city: "", postalCode: "", phone: "" });
   const [orderId, setOrderId] = useState("");
+  useEffect(() => {
+    if (!authReady || !user) return;
+    setDetails((current) => ({
+      ...current,
+      name: current.name || (typeof user.user_metadata?.full_name === "string" ? user.user_metadata.full_name : ""),
+      email: current.email || user.email || "",
+      phone: current.phone || user.phone || "",
+    }));
+  }, [authReady, user?.id]);
   useEffect(() => {
     if (!storeStateReady) return;
     const search = new URLSearchParams(window.location.search);
@@ -3263,6 +3325,10 @@ function CheckoutPage() {
   const inputClass = "w-full rounded border border-[#DBD5C7] bg-white px-4 py-3 text-sm text-[#1A1815] placeholder:text-[#9A9388] transition-colors focus:border-[#A67C3D] focus:outline-none focus:ring-2 focus:ring-[#A67C3D]/15";
   const sectionTitle = "mb-4 text-xs font-semibold uppercase tracking-[0.16em] text-[#4A463F]";
   const choiceClass = (selected: boolean) => `flex w-full cursor-pointer items-start gap-3 rounded border p-4 transition-colors ${selected ? "border-[#A67C3D] bg-[#FFFFFF]" : "border-[#DBD5C7] bg-white hover:border-[#B9AD98]"}`;
+  const continueToSignIn = (route: "login" | "register" = "login") => {
+    try { window.sessionStorage.setItem("cloud-lamps-auth-return", "/checkout"); } catch { /* Navigation still works if storage is unavailable. */ }
+    navigate(route);
+  };
 
   const applyCoupon = async () => {
     if (!couponCode.trim() || validatingCoupon) return;
@@ -3371,6 +3437,24 @@ function CheckoutPage() {
     );
   }
 
+  if (!authReady) {
+    return <section className="mx-auto flex min-h-[60vh] max-w-2xl items-center justify-center px-6 py-16 text-center"><p className="text-sm text-[#8A8377]">Checking your account…</p></section>;
+  }
+
+  if (!user) {
+    return (
+      <section className="mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center px-6 py-16 text-center">
+        <User size={34} strokeWidth={1} className="mb-5 text-[#A67C3D]" />
+        <h1 className="mb-3 text-3xl font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>Sign in to continue</h1>
+        <p className="mb-7 max-w-md text-sm leading-6 text-[#8A8377]">Please sign in to your account before checkout. Your bag will be saved while you sign in.</p>
+        <div className="flex flex-wrap justify-center gap-3">
+          <button type="button" onClick={() => continueToSignIn("login")} className="bg-[#1A1815] px-7 py-3.5 text-[11px] font-medium uppercase tracking-widest text-white transition-colors hover:bg-[#2E2A24]">Sign in</button>
+          <button type="button" onClick={() => continueToSignIn("register")} className="border border-[#DBD5C7] px-7 py-3.5 text-[11px] font-medium uppercase tracking-widest text-[#4A463F] transition-colors hover:bg-white">Create account</button>
+        </div>
+      </section>
+    );
+  }
+
   if (cart.length === 0) {
     return (
       <section className="mx-auto flex min-h-[60vh] max-w-2xl flex-col items-center justify-center px-6 py-16 text-center">
@@ -3447,9 +3531,8 @@ function CheckoutPage() {
 
             <fieldset>
               <legend className={sectionTitle}>6. Payment</legend>
-              <div className="grid gap-2.5 sm:grid-cols-3">
+              <div className="grid gap-2.5 sm:grid-cols-2">
                 {([
-                  { id: "card", label: "Credit / debit card" },
                   { id: "bkash", label: "bKash" },
                   { id: "cod", label: "Cash on delivery" },
                 ] as const).map((option) => {
@@ -3460,7 +3543,7 @@ function CheckoutPage() {
                   </label>;
                 })}
               </div>
-              <p className="mt-3 text-xs leading-5 text-[#8A8377]">{paymentMethod === "cod" ? "Pay in cash when your order arrives." : "Visa, Mastercard, and bKash payments will use the configured secure hosted gateway. Card details are entered only on the gateway page."}</p>
+              <p className="mt-3 text-xs leading-5 text-[#8A8377]">{paymentMethod === "cod" ? "Pay in cash when your order arrives." : "You’ll continue to SSLCOMMERZ to complete your bKash payment securely."}</p>
             </fieldset>
 
             {checkoutError && <p role="alert" className="rounded border border-[#d7aaa0] bg-[#fff5f0] px-3 py-2 text-xs leading-5 text-[#8f493b]">{checkoutError}</p>}
@@ -4055,11 +4138,6 @@ function WishlistPage() {
                       <span className="text-[14px] font-medium text-[#1A1815]" style={{ fontVariantNumeric: "tabular-nums" }}>
                         {formatPrice(price)}
                       </span>
-                      {product.salePrice && (
-                        <span className="text-[12px] text-[#8A8377] line-through" style={{ fontVariantNumeric: "tabular-nums" }}>
-                          {formatPrice(product.basePrice)}
-                        </span>
-                      )}
                     </div>
                     <button
                       onClick={() => addToCart(product, { color: product.swatches[0]?.label })}
@@ -4152,6 +4230,14 @@ function AccountAuthPage() {
   const [customerRequests, setCustomerRequests] = useState<CustomerCustomRequest[]>([]);
   const [requestsError, setRequestsError] = useState("");
   const configured = Boolean(supabase);
+  const navigateAfterAuth = useCallback(() => {
+    let destination: string | null = null;
+    try {
+      destination = window.sessionStorage.getItem("cloud-lamps-auth-return");
+      if (destination) window.sessionStorage.removeItem("cloud-lamps-auth-return");
+    } catch { /* Use the normal account destination if storage is unavailable. */ }
+    navigate(destination === "/checkout" ? "checkout" : "account");
+  }, [navigate]);
   const isPasswordUpdate = route === "reset-password" || authStep === "recovery-password";
   const isRecoveryRequest = route === "forgot-password";
   const isRegistration = route === "register";
@@ -4165,8 +4251,8 @@ function AccountAuthPage() {
   }, [route]);
 
   useEffect(() => {
-    if (authReady && user && !pending && authStep === "form" && (route === "login" || route === "register")) navigate("account");
-  }, [authReady, user, pending, authStep, route, navigate]);
+    if (authReady && user && !pending && authStep === "form" && (route === "login" || route === "register")) navigateAfterAuth();
+  }, [authReady, user, pending, authStep, route, navigateAfterAuth]);
 
   useEffect(() => {
     if (route !== "account" || !user) return;
@@ -4209,7 +4295,7 @@ function AccountAuthPage() {
         if (!/^\d{6}$/.test(otp)) throw new Error("Enter the 6-digit code sent to your phone.");
         const { error: authError } = await supabase.auth.verifyOtp({ phone, token: otp, type: "sms" });
         if (authError) throw authError;
-        navigate("account");
+        navigateAfterAuth();
       } else if (isRegistration) {
         const normalizedPhone = normalizeCustomerPhone(phone);
         if (password.length < 8) throw new Error("Choose a password with at least 8 characters.");
@@ -4259,7 +4345,7 @@ function AccountAuthPage() {
         const normalizedPhone = normalizeCustomerPhone(phone);
         const { error: authError } = await supabase.auth.signInWithPassword({ phone: normalizedPhone, password });
         if (authError) throw authError;
-        navigate("account");
+        navigateAfterAuth();
       }
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "We couldn’t complete that request. Please try again.");
