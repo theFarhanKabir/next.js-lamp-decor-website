@@ -17,9 +17,32 @@ The latest Node.js Current line is newer than LTS. This backend targets the newe
 
 The service accepts either the backend names (`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`) or the root Next.js names (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, and server-only `SUPABASE_SECRET_KEY`). The secret is read only by Node and never included in the frontend bundle. The process does not make a Supabase request at startup. `/health` reports configuration presence without exposing credentials; use `/api/catalog` to verify a database read.
 
-Admin requests send a verified Supabase access token as `Authorization: Bearer <token>`; the API checks the token with Supabase Auth and then requires the trusted `app_metadata.role = "admin"` claim. Customer write routes use a verified signed-in user token or the narrowly defined guest flow.
+Admin requests send a verified Supabase access token as `Authorization: Bearer <token>`; the API checks the token with Supabase Auth and then requires the trusted `app_metadata.role = "admin"` claim. Order creation requires a verified signed-in customer. The custom request form remains available to guests.
 
 `ALLOWED_ORIGINS` defaults to `http://localhost:3000` for local development. Set it to the exact trusted site origins in production. There is no wildcard credentialed CORS.
+
+## Deploy this API to Render
+
+The repository's root `render.yaml` defines this API as a Render web service. In Render, create a new Blueprint from the GitHub repository and provide `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, and `ALLOWED_ORIGINS` when prompted. Set `ALLOWED_ORIGINS` to the exact frontend origin, including `https://` and without a trailing slash. The Blueprint uses `backend/` as its root, installs from the backend lockfile, starts with `npm start`, and checks `/health`.
+
+After the API deploys, set the frontend's `NEXT_PUBLIC_BACKEND_URL` to its public HTTPS origin (for example, `https://cloud-lamps-api.onrender.com`) and redeploy the frontend so the URL is included in the browser build. The frontend API client then attaches the signed-in user's Supabase access token to backend requests. Keep `SUPABASE_SECRET_KEY`, payment credentials, courier credentials, and SMS hook credentials only in the Render environment; never use a `NEXT_PUBLIC_` prefix for them.
+
+The Blueprint selects Render's Free plan for preview/testing. Free web services sleep after 15 minutes without traffic and can take about a minute to wake. Render says its free instances are not for production. MiMSMS requires a stable allowlisted outbound IP; Render dedicated outbound IPs require a paid plan, so confirm MiMSMS can accept Render's shared regional IP ranges before using Render Free for SMS delivery.
+
+## Phone authentication with MiMSMS
+
+Supabase Auth creates and verifies phone OTPs. Its signed Send SMS Auth Hook sends each generated OTP to this API at `POST /api/hooks/supabase/send-sms`; the API verifies Supabase's Standard Webhooks signature, formats Bangladeshi numbers as `8801…`, and sends one transactional (`T`) SMS through `https://api.mimsms.com/api/V2/SMS`. The API key, OTP, and hook signing secret remain server-side. The hook rejects requests with invalid or expired signatures and does not log OTP values.
+
+Set these server-only variables in the root `.env.local` or `backend/.env`:
+
+- `MIMSMS_USERNAME` — the email used to sign in to the MiMSMS panel.
+- `MIMSMS_API_KEY` — the active MiMSMS API key.
+- `MIMSMS_SENDER_NAME` — the exact Sender ID shown in MiMSMS.
+- `SUPABASE_SEND_SMS_HOOK_SECRETS` — the complete `v1,whsec_...` secret generated when configuring the HTTP hook in Supabase.
+
+The Supabase project must be able to reach a **public HTTPS** API URL. Localhost is not reachable from hosted Supabase Auth. MiMSMS also requires the API server's source IP and domain to be allowlisted, so deploy behind a stable outbound IP and whitelist that IP and domain in **MiMSMS → Utility → Developer**. An ordinary local or serverless dynamic egress IP may not satisfy MiMSMS's whitelist requirement. Select the approved Sender ID in **MiMSMS → Utility → Sender ID**.
+
+In Supabase, enable the **Phone** provider and phone confirmation, then open **Authentication → Hooks**, add an HTTP **Send SMS** hook for `https://YOUR_API_HOST/api/hooks/supabase/send-sms`, and copy its full signing secret into `SUPABASE_SEND_SMS_HOOK_SECRETS` on the API host. Keep the hook secret and MiMSMS API key out of all `NEXT_PUBLIC_*` variables. Set a reasonable SMS rate limit and enable CAPTCHA/bot protection before opening signup publicly. The login UI accepts Bangladesh mobile numbers and six-digit OTPs.
 
 ## Image handling
 
@@ -67,18 +90,18 @@ Local development requires the Node API on port 4000 and `NEXT_PUBLIC_BACKEND_UR
 | `GET /api/customer/rewards` | Read the signed-in customer's available rewards | Customer |
 | `GET /api/customer/orders` | Read the signed-in customer's order and courier tracking details | Customer |
 | `POST /api/coupons/validate` | Preview a coupon against the current subtotal | Public |
-| `POST /api/payments/sslcommerz/init` | Recalculate and save an online order, then create hosted checkout | Guest or signed-in customer |
+| `POST /api/payments/sslcommerz/init` | Recalculate and save a bKash order, then create hosted checkout | Signed-in customer |
 | `GET /api/payments/sslcommerz/status?tran_id={id}` | Read minimal payment status for the returned transaction | Public, high-entropy transaction ID |
 | `POST /api/payments/sslcommerz/{success,fail,cancel,ipn}` | Receive callbacks and IPN; verify against SSLCOMMERZ | Provider callback |
 | `GET /api/custom-requests` | Read custom requests and short-lived image links | Admin |
 | `POST /api/custom-requests` | Submit a guest custom request and optimized private reference photos | Public form |
-| `POST /api/orders` | Create a recalculated checkout order | Guest or signed-in customer |
+| `POST /api/orders` | Create a recalculated cash-on-delivery order | Signed-in customer |
 
-Order creation re-reads active prices and allowed options on the server. Cash on delivery uses `POST /api/orders`; card and bKash use `/api/payments/sslcommerz/init`, which recalculates the order and reserves stock, coupon use, and reward redemption atomically. The customer pays on SSLCOMMERZ Hosted Checkout. The backend independently checks transaction ID, amount, BDT currency, provider status, and risk before changing payment state. Risk flagged payments are recorded as paid but remain pending for store review; safe validated payments are automatically confirmed. Customer card details are entered on the gateway and are not sent to this store.
+Order creation requires a verified Supabase customer session and re-reads active prices and allowed options on the server. Cash on delivery uses `POST /api/orders`; bKash uses `/api/payments/sslcommerz/init`, which recalculates the order and reserves stock, coupon use, and reward redemption atomically. The customer completes bKash payment on SSLCOMMERZ Hosted Checkout. The backend independently checks transaction ID, amount, BDT currency, provider status, and risk before changing payment state. Risk flagged payments are recorded as paid but remain pending for store review; safe validated payments are automatically confirmed.
 
 ### SSLCOMMERZ setup
 
-Create a merchant account with SSLCOMMERZ and enable Visa, Mastercard, and bKash for the store. Use sandbox credentials while developing. Put the following server-only values in the root `.env.local` (read by the backend) or `backend/.env`. Never prefix gateway credentials with `NEXT_PUBLIC_`:
+Create a merchant account with SSLCOMMERZ and enable bKash for the store. Use sandbox credentials while developing. Put the following server-only values in the root `.env.local` (read by the backend) or `backend/.env`. Never prefix gateway credentials with `NEXT_PUBLIC_`:
 
 - `SSLCOMMERZ_STORE_ID`
 - `SSLCOMMERZ_STORE_PASSWORD`

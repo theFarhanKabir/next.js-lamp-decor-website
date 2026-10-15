@@ -9,6 +9,9 @@ coverage/
 supabase/.temp/
 .env*
 !.env.example
+.agents/skills/
+.headless-edge-profile/
+skills-lock.json
 *.log
 Thumbs.db
 .DS_Store

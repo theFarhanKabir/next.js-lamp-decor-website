@@ -530,7 +530,7 @@ function CategoriesPage() {
   };
   return <>
     <SectionHeading title="Categories" description="Rename or remove subcategories shown across product listings and navigation. Main departments are protected." />
-    {error && <div role="alert" className="mb-3 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] text-[#9d5548]">{error}{/sign in|administrator account/i.test(error) && <a href="/login" className="ml-2 inline-flex font-semibold underline">Sign in as administrator</a>}</div>}
+    {error && <div role="alert" className="mb-3 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] text-[#9d5548]">{error}{/sign in to continue|sign in with an administrator account/i.test(error) && <button type="button" onClick={async () => { const client = createSupabaseBrowserClient(); if (client) await client.auth.signOut({ scope: "local" }); window.location.reload(); }} className="ml-2 inline-flex font-semibold underline">Sign out and sign in to admin</button>}</div>}
     {notice && <p role="status" className="mb-3 rounded-lg border border-[#dce8d8] bg-[#f2f7ef] p-3 text-[11px] text-[#587052]">{notice}</p>}
     <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{parents.map((category) => <button key={category.id} onClick={() => setActiveId(category.id)} className={`rounded-xl border p-4 text-left transition ${activeId === category.id ? "border-[#171717] bg-white" : "border-[#e5e5e5] bg-white hover:border-[#bdbdbd]"}`}><span className="flex items-center justify-between"><span className="text-[12px] font-semibold text-[#222]">{category.name}</span><LockKeyhole size={13} className="text-[#737373]" /></span><span className="mt-2 block text-[10px] text-[#737373]">{categories.filter((item) => item.parent_id === category.id).length} subcategories · Fixed</span></button>)}</div>
     <PanelCard><div className="flex items-center justify-between border-b border-[#e5e5e5] px-5 py-4"><div><h2 className="text-[13px] font-semibold text-[#222]">Subcategories in {selected?.name ?? "department"}</h2><p className="mt-1 text-[10px] text-[#737373]">Renaming keeps the saved category link stable.</p></div><span className="rounded-md bg-[#f3f3f3] px-2.5 py-1.5 text-[10px] text-[#555]">Department name fixed</span></div>
@@ -1103,7 +1103,7 @@ function SettingsPage() {
         <label className="text-[10px] font-medium text-[#716a60]">Currency<input disabled value="BDT ? Bangladeshi Taka" className={fieldClass} /></label>
         <div className="flex justify-end sm:col-span-2"><Button type="submit" disabled={loading || saving}>{saving ? "Saving?" : "Save changes"}</Button></div>
       </form>
-      <p className="mt-5 rounded-lg border border-[#eee8de] bg-white p-3 text-[10px] text-[#827b70]"><ShieldCheck className="mr-2 inline text-[#829679]" size={14} />Online card and bKash payment processing is not configured. Checkout saves orders as pending.</p>
+      <p className="mt-5 rounded-lg border border-[#eee8de] bg-white p-3 text-[10px] text-[#827b70]"><ShieldCheck className="mr-2 inline text-[#829679]" size={14} />SSLCOMMERZ bKash checkout needs merchant credentials and a public HTTPS API URL.</p>
     </PanelCard>
   </>;
 }

@@ -1,11 +1,12 @@
 import { createServer } from "node:http";
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { config, hasSupabaseAdmin, hasSupabaseAuth } from "./config.mjs";
 import { uploadOptimizedImage, optimizeImage } from "./images.mjs";
 import { getPublicClient, getServiceClient, requireAdmin, requireUser, verifyAccessToken } from "./supabase.mjs";
 import { HttpError, imageHttpUrl, money, objectBody, slugify, text } from "./validation.mjs";
 
 const requestWindows = new Map();
+const processedSmsHookIds = new Map();
 const orderStatuses = new Set(["pending", "confirmed", "processing", "shipped", "delivered", "cancelled", "refunded"]);
 const saleStatuses = ["confirmed", "processing", "shipped", "delivered"];
 
@@ -41,6 +42,94 @@ async function readJson(request) {
     throw new HttpError(400, "The JSON body could not be read.");
   }
   return objectBody(parsed);
+}
+
+function verifySendSmsHookSignature(request, rawPayload) {
+  const hookId = request.headers["webhook-id"];
+  const timestampHeader = request.headers["webhook-timestamp"];
+  const signatureHeader = request.headers["webhook-signature"];
+  const timestamp = typeof timestampHeader === "string" ? Number(timestampHeader) : NaN;
+  if (typeof hookId !== "string" || !hookId || hookId.length > 200
+      || !Number.isSafeInteger(timestamp) || Math.abs(Date.now() - timestamp * 1000) > 5 * 60_000
+      || typeof signatureHeader !== "string") {
+    throw new HttpError(401, "The Supabase SMS hook signature is invalid or expired.");
+  }
+
+  const secrets = config.supabaseSendSmsHookSecrets.split("|").map((entry) => entry.trim()).filter(Boolean);
+  const keys = secrets.flatMap((secret) => {
+    const match = /^v1,whsec_([A-Za-z0-9+/]+={0,2})$/.exec(secret);
+    if (!match) return [];
+    const key = Buffer.from(match[1], "base64");
+    return key.length >= 16 ? [key] : [];
+  });
+  if (!keys.length) throw new HttpError(503, "The Supabase SMS hook is not configured on this server.");
+
+  const signedContent = `${hookId}.${timestampHeader}.${rawPayload}`;
+  const candidates = signatureHeader.trim().split(/\s+/).flatMap((entry) => {
+    const match = /^v1,([A-Za-z0-9+/]+={0,2})$/.exec(entry);
+    if (!match) return [];
+    return [Buffer.from(match[1], "base64")];
+  });
+  const valid = keys.some((key) => candidates.some((candidate) => {
+    const expected = createHmac("sha256", key).update(signedContent, "utf8").digest();
+    return candidate.length === expected.length && timingSafeEqual(candidate, expected);
+  }));
+  if (!valid) throw new HttpError(401, "The Supabase SMS hook signature is invalid.");
+  return hookId;
+}
+
+async function handleSupabaseSendSmsHook(request, response) {
+  const contentType = String(request.headers["content-type"] ?? "").toLowerCase();
+  if (!contentType.includes("application/json")) throw new HttpError(415, "Send this hook as JSON.");
+  const rawPayload = (await readBytes(request, 32 * 1024)).toString("utf8");
+  const hookId = verifySendSmsHookSignature(request, rawPayload);
+  if (processedSmsHookIds.has(hookId)) { response.writeHead(200, { "Cache-Control": "no-store" }); response.end(); return; }
+
+  let event;
+  try { event = JSON.parse(rawPayload); }
+  catch { throw new HttpError(400, "The Supabase SMS hook payload is not valid JSON."); }
+  const phone = typeof event?.user?.phone === "string" ? event.user.phone : "";
+  const mobileNumber = phone.replace(/\D/g, "");
+  const otp = typeof event?.sms?.otp === "string" ? event.sms.otp : String(event?.sms?.otp ?? "");
+  if (!/^8801[3-9]\d{8}$/.test(mobileNumber) || !/^\d{6}$/.test(otp)) {
+    throw new HttpError(400, "The SMS hook requires a Bangladesh mobile number and a 6-digit OTP.");
+  }
+  if (!config.mimsmsUserName || !config.mimsmsApiKey || !config.mimsmsSenderName) {
+    throw new HttpError(503, "MiMSMS credentials and a Sender ID are not configured on this server.");
+  }
+
+  let providerResponse;
+  try {
+    providerResponse = await fetch("https://api.mimsms.com/api/V2/SMS", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        apiKey: config.mimsmsApiKey,
+        userName: config.mimsmsUserName,
+        senderName: config.mimsmsSenderName,
+        campaignName: "CloudLamps OTP",
+        transactionType: "T",
+        mobileNumber,
+        message: `Your Cloud Lamps & Mirrors verification code is ${otp}. Do not share this code with anyone.`,
+      }),
+      signal: AbortSignal.timeout(4_000),
+    });
+  } catch {
+    throw new HttpError(502, "MiMSMS could not be reached to deliver the verification code.");
+  }
+  const result = await providerResponse.json().catch(() => null);
+  if (!providerResponse.ok || !result || String(result.statusCode) !== "200"
+      || String(result.status).toLowerCase() !== "success") {
+    console.error("MiMSMS rejected an authentication SMS:", String(result?.statusCode ?? providerResponse.status));
+    throw new HttpError(502, "MiMSMS could not send the verification code. Check the API key, IP/domain whitelist, and Sender ID.");
+  }
+
+  const now = Date.now();
+  for (const [id, createdAt] of processedSmsHookIds) if (now - createdAt > 10 * 60_000) processedSmsHookIds.delete(id);
+  processedSmsHookIds.set(hookId, now);
+  while (processedSmsHookIds.size > 5000) processedSmsHookIds.delete(processedSmsHookIds.keys().next().value);
+  response.writeHead(200, { "Cache-Control": "no-store" });
+  response.end();
 }
 
 function getPublicDb() {
@@ -734,6 +823,8 @@ async function startSslCommerzSession({ settings, transactionId, order, saved, b
 }
 
 async function handleCreateOrder(request, response, { onlinePayment = false } = {}) {
+  const auth = await customer(request);
+  if (auth.user.is_anonymous) throw new HttpError(401, "Create an account or sign in before checkout.");
   const gatewaySettings = onlinePayment ? getSslCommerzSettings() : null;
   const service = getAdminDb();
   const body = await readJson(request);
@@ -746,25 +837,19 @@ async function handleCreateOrder(request, response, { onlinePayment = false } = 
   const city = text(body.shipping?.city, "City", { min: 2, max: 120 });
   const postalCode = text(body.shipping?.postalCode, "Postal code", { min: 2, max: 24 });
   const deliveryMethod = body.deliveryMethod === "express" ? "express" : body.deliveryMethod === "standard" ? "standard" : "";
-  const paymentMethod = ["card", "bkash", "cod"].includes(body.paymentMethod) ? body.paymentMethod : "";
+  const paymentMethod = ["bkash", "cod"].includes(body.paymentMethod) ? body.paymentMethod : "";
   if (!deliveryMethod || !paymentMethod || (onlinePayment ? paymentMethod === "cod" : paymentMethod !== "cod")) {
-    throw new HttpError(400, onlinePayment ? "Choose card or bKash for online payment." : "Cash on delivery is the only payment method available on this order route.");
+    throw new HttpError(400, onlinePayment ? "Choose bKash for online payment." : "Cash on delivery is the only payment method available on this order route.");
   }
   if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 30) throw new HttpError(400, "Your order must contain between 1 and 30 items.");
 
-  let customerId = null;
-  const accessToken = request.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (accessToken) {
-    const user = await verifyAccessToken(accessToken);
-    if (!user) throw new HttpError(401, "Your customer session is invalid or has expired.");
-    customerId = user.id;
-    const { error: profileError } = await service.from("profiles").upsert({
-      id: user.id,
-      full_name: customerName,
-      phone: customerPhone,
-    }, { onConflict: "id" });
-    assertNoDbError(profileError, "Your customer details could not be verified.");
-  }
+  const customerId = auth.user.id;
+  const { error: profileError } = await service.from("profiles").upsert({
+    id: customerId,
+    full_name: customerName,
+    phone: customerPhone,
+  }, { onConflict: "id" });
+  assertNoDbError(profileError, "Your customer details could not be verified.");
 
   const requested = body.items.map((item) => {
     const productSlug = text(item?.productId, "Product", { min: 1, max: 120 });
@@ -1707,6 +1792,7 @@ async function route(request, response) {
   if (method === "POST" && url.pathname === "/api/coupons/validate") return handleCouponValidation(request, response);
   if (method === "POST" && url.pathname === "/api/orders") return handleCreateOrder(request, response);
   if (method === "POST" && url.pathname === "/api/payments/sslcommerz/init") return handleCreateOrder(request, response, { onlinePayment: true });
+  if (method === "POST" && url.pathname === "/api/hooks/supabase/send-sms") return handleSupabaseSendSmsHook(request, response);
   if (method === "GET" && url.pathname === "/api/payments/sslcommerz/status") return handlePaymentStatus(response, url);
   if (method === "POST" && ["/api/payments/sslcommerz/success", "/api/payments/sslcommerz/fail", "/api/payments/sslcommerz/cancel"].includes(url.pathname)) return handleSslCommerzCallback(request, response);
   if (method === "POST" && url.pathname === "/api/payments/sslcommerz/ipn") return handleSslCommerzCallback(request, response, { ipn: true });
@@ -1724,6 +1810,11 @@ const server = createServer((request, response) => {
     if (response.headersSent) { response.destroy(); return; }
     const status = error instanceof HttpError ? error.status : 500;
     if (!(error instanceof HttpError)) console.error("Unhandled API error:", error?.message ?? "unknown error");
+    if (new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`).pathname === "/api/hooks/supabase/send-sms") {
+      const message = status === 500 ? "The SMS provider could not complete this request." : error.message;
+      send(response, status, { error: { http_code: status, message } });
+      return;
+    }
     send(response, status, { error: status === 500 ? "The server could not complete this request." : error.message });
   });
 });
