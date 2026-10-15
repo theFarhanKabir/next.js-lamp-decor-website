@@ -1699,108 +1699,103 @@ function CountUp({ value, duration = 2600 }: { value: number; duration?: number 
 }
 
 function BrandBento() {
+  // Unsplash: Annie Spratt, "a room with a bed, mirror and lamp".
+  const backdropImage = "https://images.unsplash.com/photo-1676807882747-81bd093e61b6?auto=format&fit=crop&w=2400&q=85";
+
   return (
     <Reveal>
-      <section
-        className="relative isolate overflow-hidden py-16 md:py-24"
-        style={{ backgroundImage: "radial-gradient(ellipse at 16% 46%, rgba(160,178,189,0.2), transparent 36%), radial-gradient(ellipse at 82% 10%, rgba(175,163,190,0.14), transparent 31%), radial-gradient(ellipse at 72% 88%, rgba(146,174,189,0.15), transparent 35%), repeating-linear-gradient(132deg, rgba(80,95,110,0.022) 0px, rgba(80,95,110,0.022) 1px, transparent 1px, transparent 86px), linear-gradient(125deg, #F8F7F3 0%, #F0F2F3 48%, #F5F3F7 100%)" }}
-      >
-        <div aria-hidden="true" className="pointer-events-none absolute -left-36 top-28 h-72 w-72 rounded-full border border-[#8296A2]/20 shadow-[0_0_90px_rgba(161,184,191,0.10)]" />
-        <div aria-hidden="true" className="pointer-events-none absolute -right-40 bottom-0 h-96 w-96 rounded-full border border-[#9487A3]/20" />
-        <div className="max-w-[1440px] mx-auto px-5 md:px-8">
+      <section className="relative isolate overflow-hidden bg-[#F5F2EC] py-16 md:py-24">
+        <img aria-hidden="true" src={backdropImage} alt="" loading="lazy" decoding="async" className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center brightness-[1.08] saturate-[0.92]" />
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-br from-[#F8F5EE]/42 via-[#F6F1E8]/34 to-[#E9E1D5]/28" />
+        <div className="relative z-10 mx-auto max-w-[1440px] px-5 md:px-8">
           <div className="mb-9 md:mb-11 flex items-end justify-between gap-5">
             <div>
-              <p className="text-[10px] font-medium tracking-[0.2em] uppercase text-[#8B642E] mb-3">Why Cloud Lamps & Mirrors</p>
-              <h2 className="text-[30px] md:text-[38px] font-light text-[#20242A]" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.02em" }}>
+              <p className="text-[10px] font-medium tracking-[0.18em] uppercase text-[#8B642E] mb-3">Why Cloud Lamps & Mirrors</p>
+              <h2 className="text-[30px] md:text-[38px] font-light text-[#29251F]" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.02em" }}>
                 Details that shape a room
               </h2>
             </div>
-            <span className="hidden sm:inline-flex items-center gap-2 text-[9px] tracking-[0.16em] uppercase text-[#766F65] pb-1">
+            <span className="hidden sm:inline-flex items-center gap-2 text-[9px] tracking-[0.14em] uppercase text-[#6F675B] pb-1">
               <span className="w-7 h-px bg-[#C9A362]" /> Thoughtfully made
             </span>
           </div>
 
           {/* Desktop bento */}
-          <div className="relative hidden lg:grid lg:grid-cols-12 lg:grid-rows-2 gap-4" style={{ height: 460 }}>
-            <div className="relative overflow-hidden col-span-5 row-span-2 rounded-2xl border border-[#D1D8DD] bg-[#E4E8EB] p-9 flex flex-col justify-end shadow-[0_24px_70px_rgba(45,58,68,0.10)] group" style={{ backgroundImage: "radial-gradient(circle at 78% 20%, rgba(178,166,194,0.28), transparent 29%), radial-gradient(circle at 15% 92%, rgba(130,163,180,0.24), transparent 35%), linear-gradient(145deg, #E8EBED 0%, #DCE2E5 72%)" }}>
-              <div className="absolute -right-16 -top-16 w-72 h-72 rounded-full border border-[#62717D]/[0.12] transition-transform duration-700 group-hover:scale-110" />
-              <div className="absolute -right-5 -top-5 w-52 h-52 rounded-full border border-[#62717D]/[0.12]" />
-              <div className="absolute right-[4.5rem] top-[4.5rem] w-3 h-3 rounded-full bg-[#C9A362] shadow-[0_0_28px_rgba(201,163,98,0.75)]" />
-              <div className="relative z-10">
-                <p className="text-[9px] font-medium tracking-[0.2em] uppercase text-[#8B642E] mb-5">Crafted with intention</p>
-                <h3 className="text-[30px] font-light text-[#20242A] leading-tight mb-5 whitespace-pre-line" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.02em" }}>
+          <div className="hidden lg:grid lg:grid-cols-12 lg:grid-rows-2 gap-3.5" style={{ minHeight: 390 }}>
+            <div className="relative overflow-hidden col-span-5 row-span-2 rounded-2xl border border-white/70 bg-[#F2EBDD]/95 p-8 flex flex-col justify-between text-[#29251F] shadow-[0_20px_55px_rgba(64,48,27,0.16)]">
+              <span className="relative text-[9px] tracking-[0.16em] uppercase text-[#786F62]">01 <span className="mx-2 text-[#B8AA96]">/</span> Our promise</span>
+              <div className="relative max-w-[390px]">
+                <p className="text-[9px] font-medium tracking-[0.18em] uppercase text-[#8B642E] mb-4">Crafted with intention</p>
+                <h3 className="text-[30px] font-light text-[#29251F] leading-tight mb-4 whitespace-pre-line" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.02em" }}>
                   {"Museum-grade craft,\nhonest price."}
                 </h3>
-                <p className="max-w-[390px] text-[13px] text-[#48515A] leading-relaxed">
+                <p className="text-[13px] text-[#615B52] leading-relaxed">
                   Every piece at Cloud Lamps & Mirrors is chosen to shape the light, mood, and character of a room.
                 </p>
               </div>
-              <span className="absolute top-7 left-8 text-[10px] tracking-[0.18em] text-[#67717A]">01 / OUR PROMISE</span>
             </div>
 
-            <div className="relative overflow-hidden col-span-3 bg-gradient-to-br from-white/80 via-[#F8F6F1] to-[#EEE9DF] border border-[#DCD3C2] rounded-2xl p-7 flex flex-col justify-center shadow-[0_12px_36px_rgba(70,54,29,0.05)] group">
-              <span className="absolute -right-5 -top-8 w-28 h-28 rounded-full border border-[#A67C3D]/15 group-hover:scale-110 transition-transform duration-500" />
-              <p className="relative text-[48px] font-light text-[#1A1815] leading-none mb-3" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={2400} /></p>
-              <p className="relative text-[10px] tracking-[0.16em] uppercase text-[#8A8377]">Homes illuminated</p>
-              <span className="absolute bottom-0 left-7 right-7 h-[2px] bg-gradient-to-r from-[#C9A362] via-[#C9A362]/40 to-transparent" />
-            </div>
-
-            <div className="relative overflow-hidden col-span-4 bg-gradient-to-br from-[#F0EEF3] to-[#E5E2EA] border border-white/70 rounded-2xl p-7 flex flex-col justify-center shadow-[0_12px_36px_rgba(70,54,29,0.05)] group">
-              <span className="absolute -right-6 -top-9 w-32 h-32 rounded-full border border-[#625B70]/15 group-hover:scale-110 transition-transform duration-500" />
-              <span className="absolute right-8 top-8 w-2 h-2 rounded-full bg-[#766F84]" />
-              <p className="relative text-[48px] font-light text-[#625B70] leading-none mb-3" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={40} /></p>
-              <p className="relative text-[10px] tracking-[0.16em] uppercase text-[#625B70]/80">Artisan partners</p>
-            </div>
-
-            <div className="relative overflow-hidden col-span-3 bg-gradient-to-br from-white/75 to-[#F1ECE1] border border-[#DED7C9] rounded-2xl p-7 shadow-[0_12px_36px_rgba(70,54,29,0.05)] transition-transform duration-300 hover:-translate-y-1">
-              <div className="w-9 h-9 rounded-full bg-[#EDE3D0] flex items-center justify-center mb-5">
-                <Package size={16} className="text-[#A67C3D]" strokeWidth={1.5} />
+            <div className="relative overflow-hidden col-span-3 rounded-2xl border border-white/75 bg-[#F5EEE1]/96 p-6 flex flex-col justify-between shadow-[0_14px_40px_rgba(64,48,27,0.13)]">
+              <span className="text-[9px] tracking-[0.14em] uppercase text-[#827768]">Made for real homes</span>
+              <div>
+                <p className="text-[42px] font-light text-[#28251F] leading-none mb-3" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={2400} /></p>
+                <p className="text-[9px] tracking-[0.14em] uppercase text-[#766F65]">Homes illuminated</p>
               </div>
-              <p className="text-[13px] font-semibold text-[#1A1815] mb-1.5">Ready to ship</p>
-              <p className="text-[11px] text-[#8A8377] leading-relaxed">Small-batch pieces, checked before dispatch.</p>
             </div>
 
-            <div className="relative overflow-hidden col-span-4 bg-gradient-to-br from-[#EEF0E8] to-[#E4E7DB] border border-white/70 rounded-2xl p-7 shadow-[0_12px_36px_rgba(70,54,29,0.05)] transition-transform duration-300 hover:-translate-y-1">
-              <div className="w-9 h-9 rounded-full bg-[#6F7D5E]/15 flex items-center justify-center mb-5">
-                <Shield size={16} className="text-[#6F7D5E]" strokeWidth={1.5} />
+            <div className="relative overflow-hidden col-span-4 rounded-2xl border border-white/70 bg-[#E7E8DE]/96 p-6 flex flex-col justify-between shadow-[0_14px_40px_rgba(64,48,27,0.13)]">
+              <span className="text-[9px] tracking-[0.14em] uppercase text-[#6D7565]">Made with skilled hands</span>
+              <div>
+                <p className="text-[42px] font-light text-[#4D5947] leading-none mb-3" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={40} /></p>
+                <p className="text-[9px] tracking-[0.14em] uppercase text-[#68715F]">Artisan partners</p>
               </div>
-              <p className="text-[13px] font-semibold text-[#1A1815] mb-1.5">Quality materials</p>
-              <p className="text-[11px] text-[#4A463F] leading-relaxed">Considered materials: glass, brass, linen, and solid wood.</p>
+            </div>
+
+            <div className="col-span-3 rounded-2xl border border-white/75 bg-[#F8F4EB]/96 p-6 flex flex-col justify-center gap-6 shadow-[0_14px_40px_rgba(64,48,27,0.13)]">
+              <div className="w-9 h-9 rounded-lg bg-[#EEE7DB] flex items-center justify-center">
+                <Package size={16} className="text-[#8B642E]" strokeWidth={1.5} />
+              </div>
+              <div>
+                <p className="text-[13px] font-semibold text-[#28251F] mb-1.5">Ready to ship</p>
+                <p className="text-[11px] text-[#766F65] leading-relaxed">Small-batch pieces, checked before dispatch.</p>
+              </div>
+            </div>
+
+            <div className="col-span-4 rounded-2xl border border-white/70 bg-[#E7E8DE]/96 p-6 flex flex-col justify-center gap-6 shadow-[0_14px_40px_rgba(64,48,27,0.13)]">
+              <div className="w-9 h-9 rounded-lg bg-[#D8DED2] flex items-center justify-center">
+                <Shield size={16} className="text-[#56634D]" strokeWidth={1.5} />
+              </div>
+              <div>
+                <p className="text-[13px] font-semibold text-[#28251F] mb-1.5">Quality materials</p>
+                <p className="text-[11px] text-[#62685B] leading-relaxed">Considered materials: glass, brass, linen, and solid wood.</p>
+              </div>
             </div>
           </div>
 
           {/* Mobile bento */}
-          <div className="relative lg:hidden grid grid-cols-2 gap-3.5 md:gap-4">
-            <div className="relative overflow-hidden col-span-2 rounded-2xl border border-[#D1D8DD] bg-[#E4E8EB] p-6 shadow-[0_18px_48px_rgba(45,58,68,0.10)] md:p-7" style={{ backgroundImage: "radial-gradient(circle at 90% 8%, rgba(178,166,194,0.28), transparent 32%), radial-gradient(circle at 12% 100%, rgba(130,163,180,0.24), transparent 36%), linear-gradient(145deg, #E8EBED 0%, #DCE2E5 72%)" }}>
-              <div className="absolute -right-9 -top-12 w-44 h-44 rounded-full border border-[#62717D]/[0.12]" />
-              <div className="absolute right-8 top-8 w-2 h-2 rounded-full bg-[#C9A362] shadow-[0_0_20px_rgba(201,163,98,0.8)]" />
-              <div className="relative z-10">
-                <p className="text-[9px] font-medium tracking-[0.2em] uppercase text-[#8B642E] mb-3">Crafted with intention</p>
-                <h3 className="text-[23px] font-light text-[#20242A] leading-tight mb-3" style={{ fontFamily: "'Fraunces', serif" }}>
+          <div className="lg:hidden grid grid-cols-2 gap-3 md:gap-4">
+            <div className="col-span-2 rounded-2xl border border-white/70 bg-[#F2EBDD]/95 p-6 text-[#29251F] shadow-[0_16px_40px_rgba(64,48,27,0.16)] md:p-7">
+              <p className="text-[9px] font-medium tracking-[0.18em] uppercase text-[#8B642E] mb-3">Crafted with intention</p>
+              <h3 className="text-[23px] font-light text-[#29251F] leading-tight mb-3" style={{ fontFamily: "'Fraunces', serif" }}>
                   {"Museum-grade craft,\nhonest price."}
-                </h3>
-                <p className="text-[12px] text-[#48515A] leading-relaxed">Every piece at Cloud Lamps &amp; Mirrors is chosen to shape the light, mood, and character of a room.</p>
-              </div>
+              </h3>
+              <p className="text-[12px] text-[#615B52] leading-relaxed">Every piece at Cloud Lamps &amp; Mirrors is chosen to shape the light, mood, and character of a room.</p>
             </div>
-            <div className="relative overflow-hidden bg-gradient-to-br from-white/85 via-[#F8F6F1] to-[#EEE9DF] border border-[#DCD3C2] rounded-2xl p-5 shadow-[0_10px_28px_rgba(70,54,29,0.05)]">
-              <span className="absolute -right-4 -top-5 w-20 h-20 rounded-full border border-[#A67C3D]/15" />
-              <p className="relative text-[36px] font-light text-[#1A1815] leading-none mb-2" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={2400} /></p>
-              <p className="relative text-[9px] tracking-[0.13em] uppercase text-[#8A8377]">Homes illuminated</p>
+            <div className="min-h-[142px] rounded-2xl border border-white/75 bg-[#F5EEE1]/96 p-5 flex flex-col justify-between shadow-[0_12px_30px_rgba(64,48,27,0.12)]">
+              <p className="text-[32px] font-light text-[#28251F] leading-none" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={2400} /></p>
+              <p className="text-[9px] tracking-[0.12em] uppercase text-[#766F65]">Homes illuminated</p>
             </div>
-            <div className="relative overflow-hidden bg-gradient-to-br from-[#F0EEF3] to-[#E5E2EA] border border-white/70 rounded-2xl p-5 shadow-[0_10px_28px_rgba(70,54,29,0.05)]">
-              <span className="absolute -right-4 -top-5 w-20 h-20 rounded-full border border-[#625B70]/15" />
-              <p className="relative text-[36px] font-light text-[#625B70] leading-none mb-2" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={40} /></p>
-              <p className="relative text-[9px] tracking-[0.13em] uppercase text-[#625B70]/80">Artisan partners</p>
+            <div className="min-h-[142px] rounded-2xl border border-white/70 bg-[#E7E8DE]/96 p-5 flex flex-col justify-between shadow-[0_12px_30px_rgba(64,48,27,0.12)]">
+              <p className="text-[32px] font-light text-[#4D5947] leading-none" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={40} /></p>
+              <p className="text-[9px] tracking-[0.12em] uppercase text-[#68715F]">Artisan partners</p>
             </div>
-            <div className="rounded-2xl border border-white/70 bg-gradient-to-br from-[#EEF0E8] to-[#E4E7DB] p-5 shadow-[0_10px_28px_rgba(70,54,29,0.05)]">
-              <div className="w-8 h-8 rounded-full bg-[#6F7D5E]/15 flex items-center justify-center mb-4"><Package size={15} className="text-[#6F7D5E]" /></div>
-              <p className="text-[12px] font-semibold text-[#1A1815] mb-1">Ready to ship</p>
-              <p className="text-[10px] text-[#4A463F] leading-relaxed">Small-batch pieces, checked before dispatch.</p>
+            <div className="min-h-[150px] rounded-2xl border border-white/75 bg-[#F8F4EB]/96 p-5 flex flex-col justify-between shadow-[0_12px_30px_rgba(64,48,27,0.12)]">
+              <div className="w-8 h-8 rounded-lg bg-[#EEE7DB] flex items-center justify-center"><Package size={15} className="text-[#8B642E]" /></div>
+              <div><p className="text-[12px] font-semibold text-[#28251F] mb-1">Ready to ship</p><p className="text-[10px] text-[#766F65] leading-relaxed">Small-batch pieces, checked before dispatch.</p></div>
             </div>
-            <div className="rounded-2xl border border-[#DED7C9] bg-gradient-to-br from-white/75 to-[#F1ECE1] p-5 shadow-[0_10px_28px_rgba(70,54,29,0.05)]">
-              <div className="w-8 h-8 rounded-full bg-[#E8E6ED] flex items-center justify-center mb-4"><Shield size={15} className="text-[#625B70]" /></div>
-              <p className="text-[12px] font-semibold text-[#1A1815] mb-1">Quality materials</p>
-              <p className="text-[10px] text-[#4A463F] leading-relaxed">Considered materials: glass, brass, linen, and solid wood.</p>
+            <div className="min-h-[150px] rounded-2xl border border-white/70 bg-[#E7E8DE]/96 p-5 flex flex-col justify-between shadow-[0_12px_30px_rgba(64,48,27,0.12)]">
+              <div className="w-8 h-8 rounded-lg bg-[#D8DED2] flex items-center justify-center"><Shield size={15} className="text-[#56634D]" /></div>
+              <div><p className="text-[12px] font-semibold text-[#28251F] mb-1">Quality materials</p><p className="text-[10px] text-[#62685B] leading-relaxed">Considered materials: glass, brass, linen, and solid wood.</p></div>
             </div>
           </div>
         </div>
