@@ -42,10 +42,11 @@ await supabase.auth.admin.updateUserById(userId, {
 
 The Admin API requires a trusted server-only key. Keep it out of `NEXT_PUBLIC_` variables. For custom request submissions, set `SUPABASE_SECRET_KEY` in `.env.local`; the legacy `SUPABASE_SERVICE_ROLE_KEY` is also accepted. Once the admin claim is added, have the user refresh their session to receive a new access token.
 
-For a local one-time setup, add the server-only key to the root `.env.local`, open **Authentication → Users** in Supabase, copy the intended user's UUID, then run this from the project root:
+For a local one-time setup, add the server-only key to the root `.env.local`, open **Authentication → Users** in Supabase, copy the intended user's UUID, then run the script from `backend/`:
 
 ```powershell
-node --env-file=.env.local scripts/grant-admin.mjs YOUR_USER_UUID
+cd backend
+node --env-file=../.env.local scripts/grant-admin.mjs YOUR_USER_UUID
 ```
 
 The script reads the key from `.env.local`, updates only that user's trusted `app_metadata.role` claim, and never prints the key. Remove the server-only key from `.env.local` afterward if no enabled server feature needs it. Sign out and sign back in to refresh the user's session.

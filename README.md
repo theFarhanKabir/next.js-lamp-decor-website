@@ -6,9 +6,11 @@ A storefront built with Next.js 16, React 19, and TypeScript.
 
 - `frontend/` - Next.js storefront and its API routes; configure Vercel's Root Directory to this folder.
 - `backend/` - standalone Node.js API, deployable separately (for example, on Render).
+- `backend/scripts/` - trusted backend administration utilities.
 - `supabase/` - Supabase configuration and database migrations.
 - `docs/` - setup and operating guides.
 - Root `.env.local` - local shared environment values used by both apps; never commit it.
+- Root `render.yaml` - Render Blueprint for the backend service.
 
 ## Development
 

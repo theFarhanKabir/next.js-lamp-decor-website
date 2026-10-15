@@ -5,7 +5,7 @@ Standalone Node.js API for the storefront and admin data model. The Next.js brow
 ## Runtime
 
 - Production target: Node.js **24.21.0 LTS**, pinned in `.nvmrc`.
-- `npm install` (from `backend/`)
+- `npm ci` (from `backend/`)
 - The service reads the parent project's `.env.local`; an optional `backend/.env` overrides those values.
 - `npm run dev` starts the API; `npm run dev:watch` starts it with file watching; `npm start` starts it normally.
 - `npm run check` checks the JavaScript module syntax.
@@ -23,7 +23,7 @@ Admin requests send a verified Supabase access token as `Authorization: Bearer <
 
 ## Deploy this API to Render
 
-The repository's root `render.yaml` defines this API as a Render web service. In Render, create a new Blueprint from the GitHub repository and provide `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, and `ALLOWED_ORIGINS` when prompted. Set `ALLOWED_ORIGINS` to the exact frontend origin, including `https://` and without a trailing slash. The Blueprint uses `backend/` as its root, installs from the backend lockfile, starts with `npm start`, and checks `/health`.
+The repository's root `render.yaml` defines this API as a Render web service. In Render, create a new Blueprint from the GitHub repository and provide `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, and `ALLOWED_ORIGINS` when prompted. Set `ALLOWED_ORIGINS` to the exact frontend origin, including `https://` and without a trailing slash. The Blueprint uses `backend/` as its root, binds the service to `0.0.0.0`, installs from the backend lockfile, starts with `npm start`, and checks `/health`.
 
 After the API deploys, set the frontend's `NEXT_PUBLIC_BACKEND_URL` to its public HTTPS origin (for example, `https://cloud-lamps-api.onrender.com`) and redeploy the frontend so the URL is included in the browser build. The frontend API client then attaches the signed-in user's Supabase access token to backend requests. Keep `SUPABASE_SECRET_KEY`, payment credentials, courier credentials, and SMS hook credentials only in the Render environment; never use a `NEXT_PUBLIC_` prefix for them.
 
@@ -113,6 +113,6 @@ Set `NEXT_PUBLIC_BACKEND_URL` to the browser-reachable API URL and add the store
 
 ## Local frontend and backend startup
 
-Set `NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:4000` in the root `.env.local`, then restart Next.js. In separate terminals, start Next.js from the project root with `npm run dev` and this API from `backend/` with `npm run dev`. The shared frontend API client sends the signed-in user's Supabase access token to this API. Admin media uploads currently use Supabase Storage directly with the signed-in admin session; the optimized raw upload route remains available for a future upload-flow switch.
+Set `NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:4000` in the root `.env.local`, then restart Next.js. In separate terminals, start Next.js from `frontend/` with `npm run dev` and this API from `backend/` with `npm run dev`. The shared frontend API client sends the signed-in user's Supabase access token to this API. Admin media uploads currently use Supabase Storage directly with the signed-in admin session; the optimized raw upload route remains available for a future upload-flow switch.
 
 Orders are written to the existing `orders` and `order_items` tables by the transactional RPC. The database trigger added by `20261012000000_product_cost_profit.sql` snapshots current unit cost for each new order line. Homepage defaults are seeded only if no saved admin configuration exists; an administrator can replace them from **Admin → Homepage content → Save homepage**. The admin profit report excludes pending, cancelled, and refunded orders.

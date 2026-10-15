@@ -5,7 +5,7 @@ const projectUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serverKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!userId || !/^[0-9a-f-]{36}$/i.test(userId)) {
-  console.error("Usage: node --env-file=.env.local scripts/grant-admin.mjs <user-id>");
+  console.error("Usage: node --env-file=../.env.local scripts/grant-admin.mjs <user-id>");
   process.exit(1);
 }
 if (!projectUrl || !serverKey) {
