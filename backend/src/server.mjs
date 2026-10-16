@@ -312,7 +312,7 @@ function productView(row) {
 
 async function getProductRows(client, { slug, activeOnly = false } = {}) {
   let query = client.from("products")
-    .select("id,category_id,subcategory_id,name,slug,short_description,description,price_bdt,compare_at_price_bdt,status,made_to_order,lead_time,attributes,swatches,sort_order,category:categories!products_category_id_fkey(name,slug),subcategory:categories!products_subcategory_id_category_id_fkey(name,slug),product_images(public_url,alt_text,image_role,sort_order)")
+    .select("id,category_id,subcategory_id,name,slug,short_description,description,price_bdt,compare_at_price_bdt,status,made_to_order,lead_time,attributes,swatches,sort_order,category:categories!products_category_id_fkey(name,slug),subcategory:categories!products_subcategory_id_category_id_fkey(name,slug),product_images(public_url,alt_text,image_role,sort_order,image_variants)")
     .order("sort_order", { ascending: true });
   if (slug) query = query.eq("slug", slug);
   if (activeOnly) query = query.eq("status", "active");

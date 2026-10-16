@@ -64,6 +64,92 @@ type CustomRequestRecord = {
 
 const money = (amount: number) => `৳${amount.toLocaleString("en-BD")}`;
 
+type ImageVariant = { url: string; width: number; height: number; storagePath: string; bytes?: number };
+type UploadedImage = { url: string; storagePath: string; variants: ImageVariant[] };
+type ImageRole = "product" | "color" | "hero" | "category" | "deal";
+
+async function optimizeImageInBrowser(file: File) {
+  const bitmap = await createImageBitmap(file);
+  try {
+    if (bitmap.width * bitmap.height > 40_000_000) throw new Error("Image dimensions are too large to process safely.");
+    const longestEdge = Math.max(bitmap.width, bitmap.height);
+    const sizes = [...new Set([480, 960, 1600].filter((size) => size < longestEdge).concat(Math.min(longestEdge, 1600)))].sort((a, b) => a - b);
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("This browser could not process the image. Try another JPG, PNG, WebP, or AVIF file.");
+    const variants = [];
+    for (const maxEdge of sizes) {
+      const scale = Math.min(1, maxEdge / longestEdge);
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.width = width;
+      canvas.height = height;
+      context.drawImage(bitmap, 0, 0, width, height);
+      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(
+        (result) => result ? resolve(result) : reject(new Error("The image could not be converted to WebP.")),
+        "image/webp",
+        0.82,
+      ));
+      if (blob.type !== "image/webp") throw new Error("This browser cannot convert images to WebP. Try an up-to-date browser.");
+      variants.push({ blob, width, height });
+    }
+    return variants;
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function uploadOptimizedImage(file: File, role: ImageRole, productSlug = "", alt = file.name): Promise<UploadedImage> {
+  if (!["image/jpeg", "image/png", "image/webp", "image/avif"].includes(file.type) || file.size > 12 * 1024 * 1024) {
+    throw new Error("Use JPG, PNG, WebP, or AVIF images up to 12 MB.");
+  }
+
+  if (process.env.NEXT_PUBLIC_BACKEND_URL) {
+    const response = await apiFetch("/api/admin/media", {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type,
+        "X-Image-Role": role,
+        "X-Product-Slug": productSlug,
+        "X-Image-Alt": alt,
+      },
+      body: file,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.image?.url || !Array.isArray(result.image.variants)) {
+      throw new Error(typeof result.error === "string" ? result.error : "The optimized image could not be uploaded.");
+    }
+    return result.image as UploadedImage;
+  }
+
+  const supabase = createSupabaseBrowserClient();
+  if (!supabase) throw new Error("Configure Supabase before uploading images.");
+  const variants = await optimizeImageInBrowser(file);
+  const slug = productSlug.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "new-product";
+  const folder = role === "hero" || role === "category" || role === "deal" ? `homepage/${role}` : `products/${slug}`;
+  const uploadId = crypto.randomUUID();
+  const stored: ImageVariant[] = [];
+  try {
+    for (const variant of variants) {
+      const storagePath = `${folder}/${uploadId}/${variant.width}.webp`;
+      const { error } = await supabase.storage.from("store-media").upload(storagePath, variant.blob, {
+        contentType: "image/webp",
+        cacheControl: "31536000",
+        upsert: false,
+      });
+      if (error) throw error;
+      const url = supabase.storage.from("store-media").getPublicUrl(storagePath).data.publicUrl;
+      stored.push({ url, width: variant.width, height: variant.height, storagePath, bytes: variant.blob.size });
+    }
+  } catch (error) {
+    if (stored.length) await supabase.storage.from("store-media").remove(stored.map((variant) => variant.storagePath));
+    throw error;
+  }
+  const primary = stored.at(-1);
+  if (!primary) throw new Error("The optimized image could not be uploaded.");
+  return { url: primary.url, storagePath: primary.storagePath, variants: stored };
+}
+
 function Button({ children, variant = "primary", onClick, className = "", type = "button", disabled = false }: { children: React.ReactNode; variant?: "primary" | "secondary" | "quiet"; onClick?: () => void; className?: string; type?: "button" | "submit"; disabled?: boolean }) {
   const style = variant === "primary"
     ? "bg-[#171717] text-white hover:bg-[#333333] shadow-none"
@@ -451,8 +537,8 @@ function OrdersPage() {
   </>;
 }
 
-type AdminProduct = { id: string; name: string; category: string; subcategory: string; category_slug?: string; subcategory_slug?: string; status: string; price_bdt: number; inventory_quantity: number; sku?: string; slug: string; product_images?: { public_url: string }[] };
-type ProductSwatch = { label: string; color: string; imageUrl: string };
+type AdminProduct = { id: string; name: string; category: string; subcategory: string; category_slug?: string; subcategory_slug?: string; status: string; price_bdt: number; inventory_quantity: number; sku?: string; slug: string; product_images?: { public_url: string; storage_path?: string | null; image_variants?: ImageVariant[] }[] };
+type ProductSwatch = { label: string; color: string; imageUrl: string; imageVariants?: ImageVariant[] };
 
 function ProductsPage() {
   const [query, setQuery] = useState("");
@@ -463,6 +549,7 @@ function ProductsPage() {
   const [saving, setSaving] = useState(false);
   const [deletingSlug, setDeletingSlug] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [imageDetails, setImageDetails] = useState<Record<string, { storagePath?: string; variants: ImageVariant[] }>>({});
   const [notice, setNotice] = useState("");
   const [noticeIsError, setNoticeIsError] = useState(false);
   const [form, setForm] = useState({ name: "", slug: "", sku: "", category_slug: "lamps", subcategory_name: "Table Lamps", short_description: "", description: "", price_bdt: "", cost_price_bdt: "", compare_at_price_bdt: "", inventory_quantity: "0", status: "draft", promotion: "", made_to_order: false, lead_time: "", width: "", depth: "", height: "", top: "", weight: "", materials: "", finish: "", assembly: "", care: "", warranty: "", sizes: "Small:0, Medium:6400, Large:12000", images: "", special_edition: false });
@@ -488,7 +575,8 @@ function ProductsPage() {
     const details = attrs.materialDetails ?? {};
     setSizeDimensions(attrs.sizeDimensions && typeof attrs.sizeDimensions === "object" ? attrs.sizeDimensions : {});
     setForm({ name: product.name, slug: product.slug, sku: product.sku ?? "", category_slug: product.category_slug ?? "lamps", subcategory_name: product.subcategory ?? "", short_description: product.short_description ?? "", description: product.description ?? "", price_bdt: String(product.price_bdt ?? ""), cost_price_bdt: product.cost_price_bdt == null ? "" : String(product.cost_price_bdt), compare_at_price_bdt: String(product.compare_at_price_bdt ?? ""), inventory_quantity: String(product.inventory_quantity ?? 0), status: product.status ?? "draft", promotion: attrs.badge === "new" || attrs.badge === "sale" ? attrs.badge : "", made_to_order: Boolean(product.made_to_order), lead_time: product.lead_time ?? "", width: dimensions.width ?? "", depth: dimensions.depth ?? "", height: dimensions.height ?? "", top: dimensions.top ?? "", weight: dimensions.weight ?? "", materials: (attrs.materials ?? []).join(", "), finish: details.finish ?? "", assembly: details.assembly ?? "", care: details.care ?? "", warranty: details.warranty ?? "", sizes: options(attrs.sizes), images: (product.product_images ?? []).sort((a: any, b: any) => a.sort_order - b.sort_order).map((image: any) => image.public_url).join("\n"), special_edition: Boolean(attrs.special_edition) });
-    setSwatches((product.swatches ?? []).map((swatch: any) => ({ label: swatch.label ?? "", color: swatch.color ?? "#c8a96e", imageUrl: swatch.imageUrl ?? "" })));
+    setImageDetails(Object.fromEntries((product.product_images ?? []).map((image: any) => [image.public_url, { storagePath: image.storage_path ?? undefined, variants: image.image_variants ?? [] }])));
+    setSwatches((product.swatches ?? []).map((swatch: any) => ({ label: swatch.label ?? "", color: swatch.color ?? "#c8a96e", imageUrl: swatch.imageUrl ?? "", imageVariants: swatch.imageVariants ?? [] })));
     setNotice(""); setEditing(true);
   };
   const field = (key: keyof typeof form, label: string, placeholder = "", type = "text") => <label className="block text-[10px] font-medium text-[#716a60]">{label}<input type={type} value={form[key] as string} onChange={(e) => setForm({ ...form, [key]: e.target.value })} placeholder={placeholder} className="mt-1.5 h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] text-[#454139] outline-none focus:border-[#c9a06a]" /></label>;
@@ -500,7 +588,7 @@ function ProductsPage() {
     const attributes = { dimensions: Object.fromEntries((["width", "depth", "height", "top", "weight"] as const).filter((key) => form[key].trim()).map((key) => [key, form[key].trim()])), sizeDimensions: sizeDimensionsToSave, materials: form.materials.split(",").map((x) => x.trim()).filter(Boolean), materialDetails: Object.fromEntries((["finish", "assembly", "care", "warranty"] as const).filter((key) => form[key].trim()).map((key) => [key, form[key].trim()])), sizes: configuredSizes, badge: form.promotion || null, special_edition: form.special_edition };
     const imageUrls = form.images.split(/\n|,/).map((url) => url.trim()).filter(Boolean);
     try {
-      const response = await apiFetch("/api/admin/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, attributes, swatches: swatches.filter((swatch) => swatch.label.trim()).map(({ label, color, imageUrl }) => ({ label: label.trim(), color, ...(imageUrl.trim() ? { imageUrl: imageUrl.trim() } : {}) })), images: imageUrls.map((url, index) => ({ url, role: index ? "lifestyle" : "product", alt: form.name })) }) });
+      const response = await apiFetch("/api/admin/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, attributes, swatches: swatches.filter((swatch) => swatch.label.trim()).map(({ label, color, imageUrl, imageVariants }) => ({ label: label.trim(), color, ...(imageUrl.trim() ? { imageUrl: imageUrl.trim(), ...(imageVariants?.length ? { imageVariants } : {}) } : {}) })), images: imageUrls.map((url, index) => ({ url, role: index ? "lifestyle" : "product", alt: form.name, storagePath: imageDetails[url]?.storagePath, variants: imageDetails[url]?.variants ?? [] })) }) });
       const result = await response.json(); if (!response.ok) throw new Error(result.error || "Product could not be saved.");
       setNotice(form.status === "active"
         ? "Product saved and published in Supabase. It should now be available on the storefront."
@@ -543,42 +631,32 @@ function ProductsPage() {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
     if (!files.length) return;
-    const supabase = createSupabaseBrowserClient();
-    if (!supabase) { setNotice("Configure Supabase before uploading product images."); return; }
     setUploading(true);
     try {
-      const urls: string[] = [];
+      const uploaded: UploadedImage[] = [];
       for (const file of files) {
-        if (!/^image\/(jpeg|png|webp|avif)$/.test(file.type) || file.size > 10 * 1024 * 1024) throw new Error("Use JPG, PNG, WebP, or AVIF images up to 10 MB.");
-        const path = `products/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
-        const { error } = await supabase.storage.from("store-media").upload(path, file, { contentType: file.type, upsert: false });
-        if (error) throw error;
-        urls.push(supabase.storage.from("store-media").getPublicUrl(path).data.publicUrl);
+        uploaded.push(await uploadOptimizedImage(file, "product", form.slug || form.name, form.name || file.name));
       }
-      setForm((current) => ({ ...current, images: [current.images, ...urls].filter(Boolean).join("\n") }));
-      setNotice(`${urls.length} image${urls.length === 1 ? "" : "s"} uploaded.`);
+      setForm((current) => ({ ...current, images: [current.images, ...uploaded.map((image) => image.url)].filter(Boolean).join("\n") }));
+      setImageDetails((current) => ({ ...current, ...Object.fromEntries(uploaded.map((image) => [image.url, { storagePath: image.storagePath, variants: image.variants }])) }));
+      setNotice(`${uploaded.length} image${uploaded.length === 1 ? "" : "s"} optimized and uploaded.`);
     } catch (err) { setNotice(err instanceof Error ? err.message : "Image upload failed."); }
     finally { setUploading(false); }
   };
   const uploadSwatchImage = async (index: number, file?: File) => {
     if (!file) return;
-    const supabase = createSupabaseBrowserClient();
-    if (!supabase) { setNotice("Configure Supabase before uploading product images."); return; }
-    if (!/^image\/(jpeg|png|webp|avif)$/.test(file.type) || file.size > 10 * 1024 * 1024) { setNotice("Use JPG, PNG, WebP, or AVIF images up to 10 MB."); return; }
     setUploading(true);
     try {
-      const path = `products/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
-      const { error } = await supabase.storage.from("store-media").upload(path, file, { contentType: file.type, upsert: false });
-      if (error) throw error;
-      const imageUrl = supabase.storage.from("store-media").getPublicUrl(path).data.publicUrl;
-      setSwatches((current) => current.map((swatch, row) => row === index ? { ...swatch, imageUrl } : swatch));
-      setNotice("Colour image uploaded.");
+      const image = await uploadOptimizedImage(file, "color", form.slug || form.name, file.name);
+      setSwatches((current) => current.map((swatch, row) => row === index ? { ...swatch, imageUrl: image.url, imageVariants: image.variants } : swatch));
+      setNotice("Colour image optimized and uploaded.");
     } catch (err) { setNotice(err instanceof Error ? err.message : "Image upload failed."); }
     finally { setUploading(false); }
   };
   const beginNewProduct = () => {
     setForm({ name: "", slug: "", sku: "", category_slug: "lamps", subcategory_name: "Table Lamps", short_description: "", description: "", price_bdt: "", cost_price_bdt: "", compare_at_price_bdt: "", inventory_quantity: "0", status: "draft", promotion: "", made_to_order: false, lead_time: "", width: "", depth: "", height: "", top: "", weight: "", materials: "", finish: "", assembly: "", care: "", warranty: "", sizes: "Small:0, Medium:6400, Large:12000", images: "", special_edition: false });
     setSizeDimensions({});
+    setImageDetails({});
     setSwatches([{ label: "Natural Oak", color: "#c8a96e", imageUrl: "" }]); setNotice(""); setNoticeIsError(false); setEditing(true);
   };
   return <><SectionHeading title="Products" description="Manage product details, options, inventory, and storefront visibility." action={<Button onClick={beginNewProduct}><Plus size={15} /> Add product</Button>} />
@@ -1147,19 +1225,13 @@ function MediaPage() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    if (!["image/jpeg", "image/png", "image/webp", "image/avif"].includes(file.type) || file.size > 12 * 1024 * 1024) {
-      setError("Choose a JPG, PNG, WebP, or AVIF image up to 12 MB.");
-      return;
-    }
     setUploading(true);
     setError("");
     setNotice("");
     try {
-      const response = await apiFetch("/api/admin/media", { method: "POST", headers: { "Content-Type": file.type, "X-Image-Role": role, "X-Image-Alt": file.name }, body: file });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "The image could not be uploaded.");
+      await uploadOptimizedImage(file, role, "", file.name);
       await loadMedia();
-      setNotice("Image uploaded and optimized in Supabase Storage. Add its URL to homepage content to display it.");
+      setNotice("Image optimized and uploaded to Supabase Storage.");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The image could not be uploaded.");
     } finally {
@@ -1238,25 +1310,21 @@ function MediaPage() {
   </>;
 }
 
-function HomepageImageField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function HomepageImageField({ label, role, value, imageVariants, onChange }: { label: string; role: "hero" | "category" | "deal"; value: string; imageVariants?: ImageVariant[]; onChange: (value: string, variants?: ImageVariant[]) => void }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const upload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; event.target.value = "";
     if (!file) return;
-    if (!/^image\/(jpeg|png|webp|avif)$/.test(file.type) || file.size > 10 * 1024 * 1024) { setError("Use JPG, PNG, WebP, or AVIF files up to 10 MB."); return; }
-    const supabase = createSupabaseBrowserClient();
-    if (!supabase) { setError("Set up Supabase to upload images. You can paste an HTTPS image URL for now."); return; }
     setUploading(true); setError("");
     try {
-      const path = `homepage/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
-      const { error: uploadError } = await supabase.storage.from("store-media").upload(path, file, { contentType: file.type });
-      if (uploadError) throw uploadError;
-      onChange(supabase.storage.from("store-media").getPublicUrl(path).data.publicUrl);
+      const image = await uploadOptimizedImage(file, role, "", file.name);
+      onChange(image.url, image.variants);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Image upload failed."); }
     finally { setUploading(false); }
   };
-  return <div className="min-w-0"><label className="block text-[10px] font-medium text-[#716a60]">{label}<input value={value} onChange={(event) => onChange(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[10px] text-[#454139] outline-none focus:border-[#c9a06a]" /></label><div className="mt-2 flex items-center gap-3"><input type="file" accept="image/jpeg,image/png,image/webp,image/avif" onChange={(event) => void upload(event)} className="min-w-0 flex-1 text-[10px]" />{uploading && <span className="text-[10px] text-[#8d6437]">Uploading…</span>}</div>{error && <p role="alert" className="mt-1 text-[10px] text-[#9d5548]">{error}</p>}{value && <img src={value} alt="" className="mt-2 h-24 w-full rounded-lg border border-[#ece6dd] bg-white object-cover" />}</div>;
+  const srcSet = imageVariants?.map((variant) => `${variant.url} ${variant.width}w`).join(", ") || undefined;
+  return <div className="min-w-0"><label className="block text-[10px] font-medium text-[#716a60]">{label}<input value={value} onChange={(event) => onChange(event.target.value, [])} className="mt-1.5 h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[10px] text-[#454139] outline-none focus:border-[#c9a06a]" /></label><div className="mt-2 flex items-center gap-3"><input type="file" accept="image/jpeg,image/png,image/webp,image/avif" onChange={(event) => void upload(event)} className="min-w-0 flex-1 text-[10px]" />{uploading && <span className="text-[10px] text-[#8d6437]">Uploading…</span>}</div>{error && <p role="alert" className="mt-1 text-[10px] text-[#9d5548]">{error}</p>}{value && <img src={value} srcSet={srcSet} sizes="(max-width: 1024px) 100vw, 50vw" alt="" className="mt-2 h-24 w-full rounded-lg border border-[#ece6dd] bg-white object-cover" />}</div>;
 }
 
 const defaultCollectionOptions = [
@@ -1367,10 +1435,10 @@ function HomepageContentPage() {
     {!loading && unavailableArrivalCount + unavailableDealCount > 0 && <div role="status" className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#e8dfd2] bg-white p-3 text-[11px] text-[#716a60]"><span>{unavailableArrivalCount + unavailableDealCount} homepage link{unavailableArrivalCount + unavailableDealCount === 1 ? "" : "s"} point to unavailable or archived products. Reactivate them in Products or remove the links here.</span><Button variant="secondary" onClick={removeUnavailableProductLinks}>Remove unavailable links</Button></div>}
     {loading ? <PanelCard className="p-8 text-center text-xs text-[#928a7f]">Loading homepage settings…</PanelCard> : <>
       <div className="space-y-4">
-        <div><SectionHeading title="Hero slides" description="Manage homepage banners and the collection opened by each button." action={<Button variant="secondary" disabled={content.heroSlides.length >= 10} onClick={() => setContent((current) => ({ ...current, heroSlides: [...current.heroSlides, { ...DEFAULT_HOMEPAGE_CONTENT.heroSlides[0], active: false }] }))}><Plus size={14} /> Add slide</Button>} />{content.heroSlides.map((slide, index) => <PanelCard key={`hero-${index}`} className="mb-3 p-4 sm:p-5"><div className="mb-4 flex items-center justify-between"><h3 className="text-[12px] font-semibold text-[#38352f]">Slide {index + 1}</h3><label className="flex items-center gap-2 text-[10px] text-[#716a60]"><input type="checkbox" checked={slide.active} disabled={slide.active && content.heroSlides.filter((item) => item.active).length <= 1} onChange={(event) => updateHero(index, "active", event.target.checked)} /> Show on site</label><Button variant="quiet" className="min-h-8 px-3 text-[10px] text-[#9d5548]" disabled={content.heroSlides.length <= 1} onClick={() => setContent((current) => ({ ...current, heroSlides: current.heroSlides.filter((_, row) => row !== index) }))}><Trash2 size={12} /> Remove slide</Button></div><div className="grid gap-4 lg:grid-cols-[1fr_1fr]"><HomepageImageField label="Hero image URL or upload" value={slide.image} onChange={(value) => updateHero(index, "image", value)} /><div className="space-y-3"><label className="block text-[10px] font-medium text-[#716a60]">Eyebrow<input value={slide.eyebrow} onChange={(event) => updateHero(index, "eyebrow", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Headline<textarea rows={2} value={slide.headline} onChange={(event) => updateHero(index, "headline", event.target.value)} className={textAreaClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Supporting text<textarea rows={2} value={slide.subtext} onChange={(event) => updateHero(index, "subtext", event.target.value)} className={textAreaClass} /></label><div className="grid gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60]">Button label<input value={slide.ctaLabel} onChange={(event) => updateHero(index, "ctaLabel", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Collection to open<select value={slide.categorySlug} onChange={(event) => updateHero(index, "categorySlug", event.target.value)} className={inputClass}>{!collectionOptions.some((option) => option.slug === slide.categorySlug) && <option value={slide.categorySlug}>Unavailable: {slide.categorySlug}</option>}{collectionOptions.map((option) => <option key={option.slug} value={option.slug}>{option.label}</option>)}</select></label></div><label className="block text-[10px] font-medium text-[#716a60]">Image alt text<input value={slide.alt} onChange={(event) => updateHero(index, "alt", event.target.value)} className={inputClass} /></label></div></div></PanelCard>)}</div>
-        <div><SectionHeading title="Top category cards" description="These cards link customers to the collections you choose." action={<Button variant="secondary" disabled={content.categories.length >= 12} onClick={() => setContent((current) => ({ ...current, categories: [...current.categories, { ...DEFAULT_HOMEPAGE_CONTENT.categories[0], active: false }] }))}><Plus size={14} /> Add card</Button>} />{content.categories.map((category, index) => <PanelCard key={`category-${index}`} className="mb-3 p-4 sm:p-5"><div className="mb-4 flex justify-end"><Button variant="quiet" className="min-h-8 px-3 text-[10px] text-[#9d5548]" onClick={() => setContent((current) => ({ ...current, categories: current.categories.filter((_, row) => row !== index) }))}><Trash2 size={12} /> Remove card</Button></div><div className="grid gap-4 lg:grid-cols-[1fr_1fr]"><HomepageImageField label={`${category.name} image URL or upload`} value={category.image} onChange={(value) => updateCategory(index, "image", value)} /><div className="grid content-start gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60]">Card name<input value={category.name} onChange={(event) => updateCategory(index, "name", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Collection to open<select value={category.slug} onChange={(event) => updateCategory(index, "slug", event.target.value)} className={inputClass}>{!collectionOptions.some((option) => option.slug === category.slug) && <option value={category.slug}>Unavailable: {category.slug}</option>}{collectionOptions.map((option) => <option key={option.slug} value={option.slug}>{option.label}</option>)}</select></label><label className="block text-[10px] font-medium text-[#716a60]">Image alt text<input value={category.alt} onChange={(event) => updateCategory(index, "alt", event.target.value)} className={inputClass} /></label><label className="flex items-center gap-2 pt-5 text-[10px] text-[#716a60]"><input type="checkbox" checked={category.active} onChange={(event) => updateCategory(index, "active", event.target.checked)} /> Show category</label></div></div></PanelCard>)}</div>
+        <div><SectionHeading title="Hero slides" description="Manage homepage banners and the collection opened by each button." action={<Button variant="secondary" disabled={content.heroSlides.length >= 10} onClick={() => setContent((current) => ({ ...current, heroSlides: [...current.heroSlides, { ...DEFAULT_HOMEPAGE_CONTENT.heroSlides[0], active: false }] }))}><Plus size={14} /> Add slide</Button>} />{content.heroSlides.map((slide, index) => <PanelCard key={`hero-${index}`} className="mb-3 p-4 sm:p-5"><div className="mb-4 flex items-center justify-between"><h3 className="text-[12px] font-semibold text-[#38352f]">Slide {index + 1}</h3><label className="flex items-center gap-2 text-[10px] text-[#716a60]"><input type="checkbox" checked={slide.active} disabled={slide.active && content.heroSlides.filter((item) => item.active).length <= 1} onChange={(event) => updateHero(index, "active", event.target.checked)} /> Show on site</label><Button variant="quiet" className="min-h-8 px-3 text-[10px] text-[#9d5548]" disabled={content.heroSlides.length <= 1} onClick={() => setContent((current) => ({ ...current, heroSlides: current.heroSlides.filter((_, row) => row !== index) }))}><Trash2 size={12} /> Remove slide</Button></div><div className="grid gap-4 lg:grid-cols-[1fr_1fr]"><HomepageImageField label="Hero image URL or upload" role="hero" value={slide.image} imageVariants={slide.imageVariants} onChange={(value, variants) => { updateHero(index, "image", value); updateHero(index, "imageVariants", variants?.length ? variants : undefined); }} /><div className="space-y-3"><label className="block text-[10px] font-medium text-[#716a60]">Eyebrow<input value={slide.eyebrow} onChange={(event) => updateHero(index, "eyebrow", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Headline<textarea rows={2} value={slide.headline} onChange={(event) => updateHero(index, "headline", event.target.value)} className={textAreaClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Supporting text<textarea rows={2} value={slide.subtext} onChange={(event) => updateHero(index, "subtext", event.target.value)} className={textAreaClass} /></label><div className="grid gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60]">Button label<input value={slide.ctaLabel} onChange={(event) => updateHero(index, "ctaLabel", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Collection to open<select value={slide.categorySlug} onChange={(event) => updateHero(index, "categorySlug", event.target.value)} className={inputClass}>{!collectionOptions.some((option) => option.slug === slide.categorySlug) && <option value={slide.categorySlug}>Unavailable: {slide.categorySlug}</option>}{collectionOptions.map((option) => <option key={option.slug} value={option.slug}>{option.label}</option>)}</select></label></div><label className="block text-[10px] font-medium text-[#716a60]">Image alt text<input value={slide.alt} onChange={(event) => updateHero(index, "alt", event.target.value)} className={inputClass} /></label></div></div></PanelCard>)}</div>
+        <div><SectionHeading title="Top category cards" description="These cards link customers to the collections you choose." action={<Button variant="secondary" disabled={content.categories.length >= 12} onClick={() => setContent((current) => ({ ...current, categories: [...current.categories, { ...DEFAULT_HOMEPAGE_CONTENT.categories[0], active: false }] }))}><Plus size={14} /> Add card</Button>} />{content.categories.map((category, index) => <PanelCard key={`category-${index}`} className="mb-3 p-4 sm:p-5"><div className="mb-4 flex justify-end"><Button variant="quiet" className="min-h-8 px-3 text-[10px] text-[#9d5548]" onClick={() => setContent((current) => ({ ...current, categories: current.categories.filter((_, row) => row !== index) }))}><Trash2 size={12} /> Remove card</Button></div><div className="grid gap-4 lg:grid-cols-[1fr_1fr]"><HomepageImageField label={`${category.name} image URL or upload`} role="category" value={category.image} imageVariants={category.imageVariants} onChange={(value, variants) => { updateCategory(index, "image", value); updateCategory(index, "imageVariants", variants?.length ? variants : undefined); }} /><div className="grid content-start gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60]">Card name<input value={category.name} onChange={(event) => updateCategory(index, "name", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Collection to open<select value={category.slug} onChange={(event) => updateCategory(index, "slug", event.target.value)} className={inputClass}>{!collectionOptions.some((option) => option.slug === category.slug) && <option value={category.slug}>Unavailable: {category.slug}</option>}{collectionOptions.map((option) => <option key={option.slug} value={option.slug}>{option.label}</option>)}</select></label><label className="block text-[10px] font-medium text-[#716a60]">Image alt text<input value={category.alt} onChange={(event) => updateCategory(index, "alt", event.target.value)} className={inputClass} /></label><label className="flex items-center gap-2 pt-5 text-[10px] text-[#716a60]"><input type="checkbox" checked={category.active} onChange={(event) => updateCategory(index, "active", event.target.checked)} /> Show category</label></div></div></PanelCard>)}</div>
         <div><SectionHeading title="New arrivals" description="Feature active products on the homepage. Add products and upload their images in Products, then select them here." action={<div className="flex gap-2"><Button variant="quiet" disabled={!content.newArrivals.productIds.length} onClick={() => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, productIds: [] } }))}>Clear selection</Button></div>} /><PanelCard className="mb-3 p-4"><div className="grid gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60]">Section title<input maxLength={80} value={content.newArrivals.title} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, title: event.target.value } }))} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Eyebrow text<input maxLength={80} value={content.newArrivals.eyebrow} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, eyebrow: event.target.value } }))} className={inputClass} /></label><label className="flex items-center gap-2 text-[10px] text-[#716a60] sm:col-span-2"><input type="checkbox" checked={content.newArrivals.active} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, active: event.target.checked } }))} /> Show New Arrivals on the homepage and in collection filters</label></div></PanelCard><PanelCard className="divide-y divide-[#f0ece6]">{productOptions.map((product) => <label key={product.id} className="flex cursor-pointer items-center gap-3 px-4 py-3 text-[11px] text-[#34312c]"><input type="checkbox" checked={content.newArrivals.productIds.includes(product.id)} disabled={!content.newArrivals.productIds.includes(product.id) && content.newArrivals.productIds.length >= 30} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, productIds: event.target.checked ? [...current.newArrivals.productIds, product.id] : current.newArrivals.productIds.filter((id) => id !== product.id) } }))} /><span>{product.name}</span>{content.newArrivals.productIds.includes(product.id) && <span className="ml-auto text-[9px] text-[#737373]">Selected for collection</span>}</label>)}{productOptions.length === 0 && <p className="p-4 text-[11px] text-[#737373]">No products are available to feature.</p>}</PanelCard></div>
-        <div><SectionHeading title="Hot deal cards" description="Choose active products, upload deal imagery, and manage what appears on the homepage." action={<div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={!productOptions.length || content.hotDeals.length >= 30} onClick={addDeal}><Plus size={14} /> Add deal</Button></div>} /><PanelCard className="mb-3 p-4"><label className="flex items-center gap-2 text-[10px] text-[#716a60]"><input type="checkbox" checked={content.hotDealsActive} onChange={(event) => setContent((current) => ({ ...current, hotDealsActive: event.target.checked }))} /> Show Hot Deals section on site</label></PanelCard>{content.hotDeals.map((deal, index) => <PanelCard key={`deal-${index}`} className="mb-3 p-4 sm:p-5"><div className="mb-4 flex items-center justify-between"><h3 className="text-[12px] font-semibold text-[#38352f]">Deal {index + 1}</h3><label className="flex items-center gap-2 text-[10px] text-[#716a60]"><input type="checkbox" checked={deal.active} onChange={(event) => updateDeal(index, "active", event.target.checked)} /> Show on site</label><Button variant="quiet" className="min-h-8 px-3 text-[10px] text-[#9d5548]" onClick={() => setContent((current) => ({ ...current, hotDeals: current.hotDeals.filter((_, row) => row !== index) }))}><Trash2 size={12} /> Remove deal</Button></div><div className="grid gap-4 lg:grid-cols-[1fr_1fr]"><HomepageImageField label={`${deal.name} image URL or upload`} value={deal.image} onChange={(value) => updateDeal(index, "image", value)} /><div className="grid content-start gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60] sm:col-span-2">Linked product<select value={deal.productId} onChange={(event) => updateDeal(index, "productId", event.target.value)} className={inputClass}>{productOptions.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label><label className="block text-[10px] font-medium text-[#716a60]">Card title<input value={deal.name} onChange={(event) => updateDeal(index, "name", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Category label<input value={deal.category} onChange={(event) => updateDeal(index, "category", event.target.value)} className={inputClass} /></label><div className="text-[10px] font-medium text-[#716a60]">Current price from product<p className="mt-1.5 flex h-10 items-center rounded-lg border border-[#e9e4dc] bg-[#f7f7f7] px-3 text-[11px] text-[#454139]">BDT {(productOptions.find((product) => product.id === deal.productId)?.currentPrice ?? deal.price) / 100}</p></div><label className="block text-[10px] font-medium text-[#716a60]">Reference price (BDT)<input type="number" value={deal.was / 100} onChange={(event) => updateDeal(index, "was", Number(event.target.value) * 100)} className={inputClass} /><span className="mt-1 block text-[9px] font-normal text-[#928a7e]">Checkout price follows the linked product. Set its selling and original prices in Products.</span></label><label className="block text-[10px] font-medium text-[#716a60] sm:col-span-2">Image alt text<input value={deal.alt} onChange={(event) => updateDeal(index, "alt", event.target.value)} className={inputClass} /></label></div></div></PanelCard>)}</div>
+        <div><SectionHeading title="Hot deal cards" description="Choose active products, upload deal imagery, and manage what appears on the homepage." action={<div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={!productOptions.length || content.hotDeals.length >= 30} onClick={addDeal}><Plus size={14} /> Add deal</Button></div>} /><PanelCard className="mb-3 p-4"><label className="flex items-center gap-2 text-[10px] text-[#716a60]"><input type="checkbox" checked={content.hotDealsActive} onChange={(event) => setContent((current) => ({ ...current, hotDealsActive: event.target.checked }))} /> Show Hot Deals section on site</label></PanelCard>{content.hotDeals.map((deal, index) => <PanelCard key={`deal-${index}`} className="mb-3 p-4 sm:p-5"><div className="mb-4 flex items-center justify-between"><h3 className="text-[12px] font-semibold text-[#38352f]">Deal {index + 1}</h3><label className="flex items-center gap-2 text-[10px] text-[#716a60]"><input type="checkbox" checked={deal.active} onChange={(event) => updateDeal(index, "active", event.target.checked)} /> Show on site</label><Button variant="quiet" className="min-h-8 px-3 text-[10px] text-[#9d5548]" onClick={() => setContent((current) => ({ ...current, hotDeals: current.hotDeals.filter((_, row) => row !== index) }))}><Trash2 size={12} /> Remove deal</Button></div><div className="grid gap-4 lg:grid-cols-[1fr_1fr]"><HomepageImageField label={`${deal.name} image URL or upload`} role="deal" value={deal.image} imageVariants={deal.imageVariants} onChange={(value, variants) => { updateDeal(index, "image", value); updateDeal(index, "imageVariants", variants?.length ? variants : undefined); }} /><div className="grid content-start gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60] sm:col-span-2">Linked product<select value={deal.productId} onChange={(event) => updateDeal(index, "productId", event.target.value)} className={inputClass}>{productOptions.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label><label className="block text-[10px] font-medium text-[#716a60]">Card title<input value={deal.name} onChange={(event) => updateDeal(index, "name", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Category label<input value={deal.category} onChange={(event) => updateDeal(index, "category", event.target.value)} className={inputClass} /></label><div className="text-[10px] font-medium text-[#716a60]">Current price from product<p className="mt-1.5 flex h-10 items-center rounded-lg border border-[#e9e4dc] bg-[#f7f7f7] px-3 text-[11px] text-[#454139]">BDT {(productOptions.find((product) => product.id === deal.productId)?.currentPrice ?? deal.price) / 100}</p></div><label className="block text-[10px] font-medium text-[#716a60]">Reference price (BDT)<input type="number" value={deal.was / 100} onChange={(event) => updateDeal(index, "was", Number(event.target.value) * 100)} className={inputClass} /><span className="mt-1 block text-[9px] font-normal text-[#928a7e]">Checkout price follows the linked product. Set its selling and original prices in Products.</span></label><label className="block text-[10px] font-medium text-[#716a60] sm:col-span-2">Image alt text<input value={deal.alt} onChange={(event) => updateDeal(index, "alt", event.target.value)} className={inputClass} /></label></div></div></PanelCard>)}</div>
       </div>
       <div className="mt-5 flex justify-end"><Button disabled={saving} onClick={() => void save()}><Check size={14} /> {saving ? "Saving…" : "Save homepage content"}</Button></div>
     </>}

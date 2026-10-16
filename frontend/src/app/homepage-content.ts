@@ -1,8 +1,9 @@
 const unsplash = (photo: string, width: number) => `https://images.unsplash.com/${photo}?auto=format&fit=crop&w=${width}&q=80`;
 
-export type HeroSlide = { image: string; alt: string; eyebrow: string; headline: string; subtext: string; ctaLabel: string; categorySlug: string; active: boolean };
-export type HomeCategory = { name: string; image: string; alt: string; slug: string; active: boolean };
-export type HotDeal = { productId: string; name: string; category: string; price: number; was: number; image: string; alt: string; active: boolean };
+export type ResponsiveImageVariant = { url: string; width: number; height: number; storagePath: string; bytes?: number };
+export type HeroSlide = { image: string; imageVariants?: ResponsiveImageVariant[]; alt: string; eyebrow: string; headline: string; subtext: string; ctaLabel: string; categorySlug: string; active: boolean };
+export type HomeCategory = { name: string; image: string; imageVariants?: ResponsiveImageVariant[]; alt: string; slug: string; active: boolean };
+export type HotDeal = { productId: string; name: string; category: string; price: number; was: number; image: string; imageVariants?: ResponsiveImageVariant[]; alt: string; active: boolean };
 export type NewArrivalsContent = { title: string; eyebrow: string; productIds: string[]; active: boolean };
 export type HomepageContent = { heroSlides: HeroSlide[]; categories: HomeCategory[]; hotDeals: HotDeal[]; hotDealsActive: boolean; newArrivals: NewArrivalsContent };
 

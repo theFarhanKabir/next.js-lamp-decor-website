@@ -70,7 +70,7 @@ export async function POST(request: Request) {
   };
   const { data, error } = await supabase.from("products").upsert(record, { onConflict: "slug" }).select("id,slug").single();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-  const images = Array.isArray(body.images) ? body.images.filter((image: any) => image?.url).map((image: any, index: number) => ({ product_id: data.id, public_url: image.url, alt_text: image.alt || name, image_role: image.role === "lifestyle" ? "lifestyle" : "product", sort_order: index })) : [];
+  const images = Array.isArray(body.images) ? body.images.filter((image: any) => image?.url).map((image: any, index: number) => ({ product_id: data.id, public_url: image.url, storage_path: image.storagePath ?? image.storage_path ?? null, image_variants: Array.isArray(image.variants) ? image.variants : Array.isArray(image.image_variants) ? image.image_variants : [], alt_text: image.alt || name, image_role: image.role === "lifestyle" ? "lifestyle" : "product", sort_order: index })) : [];
   const { error: deleteError } = await supabase.from("product_images").delete().eq("product_id", data.id);
   if (deleteError) return NextResponse.json({ error: deleteError.message }, { status: 500 });
   if (images.length) {

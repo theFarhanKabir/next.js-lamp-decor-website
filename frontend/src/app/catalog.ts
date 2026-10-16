@@ -1,5 +1,6 @@
 export interface SizeOption { label: string; delta: number; }
-export interface Swatch { color: string; label: string; imageUrl?: string; }
+export interface ImageVariant { url: string; width: number; height?: number; storagePath?: string; bytes?: number; }
+export interface Swatch { color: string; label: string; imageUrl?: string; imageVariants?: ImageVariant[]; }
 export interface ProductDimensions { width?: string; depth?: string; height?: string; top?: string; weight?: string; [key: string]: string | undefined; }
 export interface ProductMaterialDetails { finish?: string; assembly?: string; care?: string; warranty?: string; [key: string]: string | undefined; }
 
@@ -19,7 +20,7 @@ export interface Product {
   reviewCount?: number;
   swatches: Swatch[];
   images: { silo: string; lifestyle: string; siloSrcSet?: string; lifestyleSrcSet?: string };
-  imageVariants?: Record<string, { url: string; width: number }[]>;
+  imageVariants?: Record<string, ImageVariant[]>;
   gallery?: string[];
   sizes?: SizeOption[];
   fabrics?: SizeOption[];
