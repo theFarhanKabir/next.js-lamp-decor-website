@@ -1,18 +1,17 @@
 import { NextResponse } from "next/server";
 import { createPublicClient } from "../../../lib/supabase/server";
-import { PRODUCTS, type Product } from "../../catalog";
+import type { Product } from "../../catalog";
 
-// Local catalogue remains the graceful fallback until Supabase is configured.
 export async function GET() {
   const supabase = createPublicClient();
-  if (!supabase) return NextResponse.json({ products: PRODUCTS, categories: [], source: "fallback" });
+  if (!supabase) return NextResponse.json({ products: [], categories: [], source: "unconfigured" });
 
   const [{ data, error }, { data: categoryRows, error: categoryError }] = await Promise.all([supabase
     .from("products")
       .select("id,category_id,subcategory_id,name,slug,short_description,description,price_bdt,compare_at_price_bdt,status,made_to_order,lead_time,attributes,swatches,sort_order,category:categories!products_category_id_fkey(name,slug),subcategory:categories!products_subcategory_id_category_id_fkey(name,slug),product_images(public_url,alt_text,image_role,sort_order,image_variants)")
     .eq("status", "active")
     .order("sort_order"), supabase.from("categories").select("id,name,slug,parent_id,is_active").eq("is_active", true).order("sort_order")]);
-  if (error) return NextResponse.json({ products: PRODUCTS, categories: [], source: "fallback" });
+  if (error) return NextResponse.json({ products: [], categories: [], source: "unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
   const parents = new Map((categoryRows ?? []).filter((row) => !row.parent_id).map((row) => [row.id, row]));
   const categories = categoryError ? [] : (categoryRows ?? []).filter((row) => row.parent_id).map((row) => ({
     name: row.name,

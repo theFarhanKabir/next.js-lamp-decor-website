@@ -19,7 +19,7 @@ function errorResponse(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const sessionClient = await createSessionClient({ admin: true });
   if (!sessionClient) return errorResponse("Supabase is not configured.", 503);
 
@@ -29,10 +29,14 @@ export async function GET() {
   const supabase = createServiceClient();
   if (!supabase) return errorResponse("The server Supabase service key is not configured.", 503);
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("custom_requests")
-    .select("id, request_number, full_name, phone, email, city_area, delivery_address, description, status, admin_note, quoted_price_bdt, created_at, custom_request_status_events(id,from_status,to_status,actor_email,note,created_at), custom_request_images(id, file_name, storage_path, sort_order)")
+    .select("id, request_number, full_name, phone, email, city_area, delivery_address, description, status, admin_note, quoted_price_bdt, created_at, archived_at, custom_request_status_events(id,from_status,to_status,actor_email,note,created_at), custom_request_images(id, file_name, storage_path, sort_order)")
     .order("created_at", { ascending: false });
+  query = new URL(request.url).searchParams.get("view") === "archive"
+    ? query.not("archived_at", "is", null)
+    : query.is("archived_at", null);
+  const { data, error } = await query;
 
   if (error) return errorResponse("Could not load custom requests. Apply the latest Supabase migration and try again.", 500);
 
@@ -59,9 +63,22 @@ export async function PATCH(request: Request) {
   let body: Record<string, unknown>;
   try { body = await request.json(); } catch { return errorResponse("Invalid request body.", 400); }
   const id = typeof body.id === "string" ? body.id : "";
+  if (/^[0-9a-f-]{36}$/i.test(id) && (body.action === "archive" || body.action === "restore")) {
+    const archivedAt = body.action === "archive" ? new Date().toISOString() : null;
+    let update = service.from("custom_requests").update({ archived_at: archivedAt }).eq("id", id);
+    update = archivedAt ? update.is("archived_at", null) : update.not("archived_at", "is", null);
+    const { data, error } = await update.select("id,archived_at").maybeSingle();
+    if (error) return errorResponse("The request archive could not be updated. Apply the latest Supabase migration and try again.", 500);
+    if (!data) return errorResponse("This request is already in that archive state or no longer exists.", 409);
+    return NextResponse.json({ ok: true, request: data });
+  }
   const status = typeof body.status === "string" ? body.status : "";
   const statuses = ["new", "reviewing", "quoted", "completed", "declined", "pending", "confirmed", "processing", "shipped", "delivered", "cancelled"];
   if (!/^[0-9a-f-]{36}$/i.test(id) || !statuses.includes(status)) return errorResponse("Choose a valid custom request and status.", 400);
+  const { data: currentRequest, error: currentRequestError } = await service.from("custom_requests").select("archived_at").eq("id", id).maybeSingle();
+  if (currentRequestError) return errorResponse("The custom request could not be loaded.", 500);
+  if (!currentRequest) return errorResponse("Custom request not found.", 404);
+  if (currentRequest.archived_at) return errorResponse("Restore the request before changing its status.", 409);
   const quote = body.quoted_price_bdt == null || body.quoted_price_bdt === "" ? null : Number(body.quoted_price_bdt);
   if (quote !== null && (!Number.isFinite(quote) || quote < 0 || quote > 100000000)) return errorResponse("Enter a valid quote amount in BDT.", 400);
   const note = typeof body.admin_note === "string" ? body.admin_note.trim().slice(0, 4000) || null : null;
@@ -73,6 +90,37 @@ export async function PATCH(request: Request) {
   if (error?.code === "22023") return errorResponse(error.message, 409);
   if (error) return errorResponse("The custom request status could not be updated. Apply the latest Supabase migration and try again.", 500);
   return NextResponse.json({ ok: true, request: data });
+}
+
+export async function DELETE(request: Request) {
+  const sessionClient = await createSessionClient({ admin: true });
+  if (!sessionClient) return errorResponse("Supabase is not configured.", 503);
+  const { data: { user }, error: authError } = await sessionClient.auth.getUser();
+  if (authError || !user) return errorResponse("Sign in with an administrator account.", 401);
+  if (user.app_metadata?.role !== "admin") return errorResponse("Administrator access is required.", 403);
+  const service = createServiceClient();
+  if (!service) return errorResponse("The server Supabase service key is not configured.", 503);
+  let body: Record<string, unknown>;
+  try { body = await request.json(); } catch { return errorResponse("Invalid request body.", 400); }
+  const id = typeof body.id === "string" ? body.id : "";
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return errorResponse("Choose a valid custom request.", 400);
+  const { data: requestRow, error: requestError } = await service.from("custom_requests")
+    .select("id,archived_at").eq("id", id).maybeSingle();
+  if (requestError) return errorResponse("The request could not be loaded.", 500);
+  if (!requestRow) return errorResponse("Custom request not found.", 404);
+  if (!requestRow.archived_at) return errorResponse("Archive the request before permanently deleting it.", 409);
+  const { data: images, error: imageError } = await service.from("custom_request_images").select("storage_path").eq("request_id", id);
+  if (imageError) return errorResponse("The request reference photos could not be loaded.", 500);
+  const { data: deleted, error: deleteError } = await service.from("custom_requests")
+    .delete().eq("id", id).not("archived_at", "is", null).select("id").maybeSingle();
+  if (deleteError) return errorResponse("The request could not be permanently deleted.", 500);
+  if (!deleted) return errorResponse("The request was restored before it could be deleted.", 409);
+  const storagePaths = (images ?? []).map((image) => image.storage_path).filter(Boolean);
+  const { error: storageError } = storagePaths.length ? await service.storage.from(bucket).remove(storagePaths) : { error: null };
+  return NextResponse.json({
+    ok: true,
+    ...(storageError ? { warning: "The request was deleted, but some reference photos could not be removed from Storage." } : {}),
+  });
 }
 
 export async function POST(request: Request) {

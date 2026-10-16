@@ -10,7 +10,6 @@ import {
   Users, X,
   type LucideIcon,
 } from "lucide-react";
-import { PRODUCTS } from "../../app/catalog";
 import { apiFetch } from "../../lib/api";
 import { createAdminClient as createSupabaseBrowserClient } from "../../lib/supabase/client";
 import { DEFAULT_HOMEPAGE_CONTENT, type HomepageContent, type HeroSlide, type HomeCategory, type HotDeal } from "../../app/homepage-content";
@@ -20,8 +19,8 @@ const notifyStorefrontDataUpdated = () => window.dispatchEvent(new Event("storef
 type PanelKey = "Overview" | "Orders" | "Custom requests" | "Products" | "Categories" | "Customers" | "Reviews" | "Coupons" | "Rewards" | "Media library" | "Homepage content" | "Analytics" | "Settings";
 type OrderStatus = "Pending" | "Confirmed" | "Processing" | "Shipped" | "Delivered" | "Cancelled" | "Refunded";
 type StatusEvent = { id: string; from_status: string | null; to_status: string; actor_email: string; note: string | null; created_at: string };
-type StoredOrder = { id: string; order_number: number; customer_name: string; customer_email: string; placed_at: string; total_bdt: number; payment_method: string | null; payment_status?: string; payment_refund_reference?: string | null; status: string; courier_status?: string; courier_tracking_code?: string | null; courier_return_status?: string | null; courier_return_request_id?: number | null; courier_message?: string | null; payment_transaction?: { status: string; risk_level: number | null } | null; order_status_events?: StatusEvent[]; order_items?: { quantity: number }[] };
-type AdminOrderRow = { id: string; number: string; customer: string; email: string; date: string; items: number; total: number; status: OrderStatus; paymentStatus: string; paymentMethod: string; refundReference: string; method: string; courierStatus: string; trackingCode: string; returnStatus: string; events: StatusEvent[] };
+type StoredOrder = { id: string; order_number: number; customer_name: string; customer_email: string; placed_at: string; total_bdt: number; payment_method: string | null; payment_status?: string; payment_refund_reference?: string | null; status: string; archived_at?: string | null; courier_status?: string; courier_tracking_code?: string | null; courier_return_status?: string | null; courier_return_request_id?: number | null; courier_message?: string | null; payment_transaction?: { status: string; risk_level: number | null } | null; order_status_events?: StatusEvent[]; order_items?: { quantity: number }[] };
+type AdminOrderRow = { id: string; number: string; customer: string; email: string; date: string; items: number; total: number; status: OrderStatus; archivedAt: string | null; paymentStatus: string; paymentMethod: string; refundReference: string; method: string; courierStatus: string; trackingCode: string; returnStatus: string; events: StatusEvent[] };
 type AdminReview = { id: string; product_slug: string | null; customer_name: string; rating: number; title: string | null; body: string; status: "pending" | "published" | "hidden"; created_at: string; admin_reply: string | null };
 const orderStatuses: OrderStatus[] = ["Pending", "Confirmed", "Processing", "Shipped", "Delivered", "Cancelled", "Refunded"];
 
@@ -55,16 +54,13 @@ type CustomRequestRecord = {
   status: string;
   admin_note?: string | null;
   quoted_price_bdt?: number | null;
+  archived_at?: string | null;
   custom_request_status_events?: StatusEvent[];
   created_at: string;
   images: { id: string; file_name: string; signed_url?: string | null }[];
 };
 
-const demoRequests: CustomRequestRecord[] = [
-  { id: "demo-1", request_number: "CR-2036", full_name: "Nadia Rahman", phone: "+880 1712-345678", email: "nadia.r@email.com", city_area: "Gulshan, Dhaka", delivery_address: "Road 12, Gulshan 1, Dhaka", description: "I would love a pair of bedside lamps inspired by the attached reference. Please make the base in warm walnut and keep the shade in a natural linen tone. The lamps should work with warm LED bulbs.", status: "new", created_at: "2026-10-08T08:20:00.000Z", images: [{ id: "demo-1-a", file_name: "bedside-lamp-reference.jpg", signed_url: "https://images.unsplash.com/photo-1507473885765-e6ed057f782c?auto=format&fit=crop&w=800&q=80" }, { id: "demo-1-b", file_name: "linen-shade-inspiration.jpg", signed_url: "https://images.unsplash.com/photo-1507473885765-e6ed057f782c?auto=format&fit=crop&w=800&q=80" }] },
-  { id: "demo-2", request_number: "CR-2035", full_name: "Samir Hossain", phone: "+880 1811-223344", email: "samir.h@email.com", city_area: "Dhanmondi, Dhaka", delivery_address: "House 8, Road 4, Dhanmondi, Dhaka", description: "Could you make an arched full-length mirror with a slim antique brass frame? I have a 30 inch wide wall space and would like the proportions to feel similar to the photo.", status: "reviewing", created_at: "2026-10-07T13:45:00.000Z", images: [{ id: "demo-2-a", file_name: "arched-mirror-reference.png", signed_url: "https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=800&q=80" }] },
-  { id: "demo-3", request_number: "CR-2034", full_name: "Ayesha Karim", phone: "+880 1912-987654", email: "ayesha.k@email.com", city_area: "Banani, Dhaka", delivery_address: "Block C, Banani, Dhaka", description: "I am looking for a round dining table for six in a medium oak finish. Please share a quote and let me know if the pedestal base in my reference can be made.", status: "new", created_at: "2026-10-06T09:10:00.000Z", images: [] },
-];
+
 
 const money = (amount: number) => `৳${amount.toLocaleString("en-BD")}`;
 
@@ -105,10 +101,20 @@ type OverviewData = {
   recentOrders: StoredOrder[];
 };
 
+type OverviewProfitReport = {
+  year: number;
+  months: { month: number; revenue: number; profit: number; orderCount: number; missingCostItems: number }[];
+  totals: { revenue: number; grossProfit: number | null; orderCount: number; missingCostItems: number };
+};
+
 function Overview({ onNavigate }: { onNavigate: (page: PanelKey) => void }) {
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [profitReport, setProfitReport] = useState<OverviewProfitReport | null>(null);
+  const [profitLoading, setProfitLoading] = useState(true);
+  const [profitError, setProfitError] = useState("");
+  const year = new Date().getFullYear();
   useEffect(() => {
     let active = true;
     apiFetch("/api/admin/overview", { cache: "no-store" }).then(async (response) => {
@@ -118,31 +124,93 @@ function Overview({ onNavigate }: { onNavigate: (page: PanelKey) => void }) {
     }).then((result) => { if (active) setData(result); }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Store overview could not be loaded."); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, []);
+  useEffect(() => {
+    let active = true;
+    apiFetch("/api/admin/profit?year=" + year, { cache: "no-store" }).then(async (response) => {
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "Sales insights could not be loaded.");
+      return result as OverviewProfitReport;
+    }).then((result) => { if (active) { setProfitReport(result); setProfitError(""); } })
+      .catch((reason) => { if (active) setProfitError(reason instanceof Error ? reason.message : "Sales insights could not be loaded."); })
+      .finally(() => { if (active) setProfitLoading(false); });
+    return () => { active = false; };
+  }, [year]);
+
   const summary = data?.summary;
-  const cards = [
-    { label: "Products", value: summary?.productCount ?? 0, icon: Package, action: "Products" as PanelKey },
-    { label: "Orders", value: summary?.orderCount ?? 0, icon: ShoppingBag, action: "Orders" as PanelKey },
-    { label: "Customers", value: summary?.customerCount ?? 0, icon: Users, action: "Customers" as PanelKey },
-    { label: "Pending orders", value: summary?.pendingOrderCount ?? 0, icon: Activity, action: "Orders" as PanelKey },
+  const months = profitReport?.months ?? Array.from({ length: 12 }, (_, index) => ({ month: index + 1, revenue: 0, profit: 0, orderCount: 0, missingCostItems: 0 }));
+  const maxRevenue = Math.max(1, ...months.map((item) => item.revenue));
+  const currentMonth = profitReport?.months[new Date().getMonth()];
+  const monthLabel = new Intl.DateTimeFormat("en", { month: "short" });
+  const metrics = [
+    { label: "Sales this month", value: profitReport ? money(currentMonth?.revenue ?? 0) : "—", detail: (currentMonth?.orderCount ?? 0) + " confirmed or completed orders", icon: TrendingUp, action: "Analytics" as PanelKey },
+    { label: "Gross profit this month", value: currentMonth?.missingCostItems ? "Incomplete" : profitReport ? money(currentMonth?.profit ?? 0) : "—", detail: currentMonth?.missingCostItems ? currentMonth.missingCostItems + " sold items need cost data" : "Sales less product cost", icon: BarChart3, action: "Analytics" as PanelKey },
+    { label: "All orders", value: loading ? "—" : (summary?.orderCount ?? 0).toLocaleString(), detail: "Orders saved in your store", icon: ShoppingBag, action: "Orders" as PanelKey },
+    { label: "Pending orders", value: loading ? "—" : (summary?.pendingOrderCount ?? 0).toLocaleString(), detail: "Awaiting an update", icon: Activity, action: "Orders" as PanelKey },
   ];
   return <>
-    <SectionHeading title="Overview" description="Live totals from your Supabase store." action={<Button variant="secondary" onClick={() => onNavigate("Analytics")}><BarChart3 size={14} /> Sales report</Button>} />
+    <SectionHeading title="Overview" description="Store performance and recent activity at a glance." action={<Button variant="secondary" onClick={() => onNavigate("Analytics")}><BarChart3 size={14} /> Full analytics</Button>} />
     {error && <p role="alert" className="mb-4 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] text-[#8f493b]">{error}</p>}
-    <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{cards.map(({ label, value, icon: Icon, action }) => <button type="button" key={label} onClick={() => onNavigate(action)} className="rounded-xl border border-[#ece6dd] bg-white p-4 text-left transition hover:border-[#d8c6aa]"><div className="flex items-center justify-between"><p className="text-[10px] text-[#8f887e]">{label}</p><Icon size={15} className="text-[#a77b43]" /></div><p className="mt-3 text-[22px] font-semibold text-[#34312c]">{loading ? "?" : value.toLocaleString()}</p></button>)}</div>
-    <div className="mb-4 grid gap-4 lg:grid-cols-[1.2fr_.8fr]">
-      <PanelCard className="p-5"><div className="flex items-start justify-between"><div><h2 className="text-[13px] font-semibold text-[#34312c]">This month</h2><p className="mt-1 text-[10px] text-[#a09a90]">Confirmed through delivered orders</p></div><TrendingUp size={17} className="text-[#9aaf8c]" /></div><p className="mt-5 text-[28px] font-semibold text-[#34312c]">{loading ? "?" : money(Math.round((summary?.monthRevenueBdt ?? 0) * 100))}</p><p className="mt-2 text-[10px] text-[#8f887e]">{summary?.monthOrderCount ?? 0} qualifying orders ? product sales before delivery fees</p></PanelCard>
-      <PanelCard className="p-5"><h2 className="text-[13px] font-semibold text-[#34312c]">Quick actions</h2><div className="mt-4 grid grid-cols-2 gap-2">{([["Products", Package], ["Categories", Boxes], ["Homepage content", Sparkles], ["Orders", ShoppingBag]] as const).map(([label, Icon]) => <button type="button" key={label} onClick={() => onNavigate(label)} className="flex items-center gap-2 rounded-lg border border-[#eee8de] p-3 text-left text-[10px] font-medium text-[#625d55] hover:bg-[#faf9f7]"><Icon size={14} className="text-[#a77b43]" />{label}</button>)}</div></PanelCard>
+    {profitError && <p role="alert" className="mb-4 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] text-[#8f493b]">{profitError}</p>}
+    <div className="mb-4 grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,1fr)]">
+      <PanelCard className="overflow-hidden">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#ededed] px-5 py-4 sm:px-6">
+          <div><h2 className="text-[14px] font-semibold text-[#252525]">Monthly sales and gross profit</h2><p className="mt-1 text-[11px] text-[#777]">Revenue excludes delivery fees · {year}</p></div>
+          <div className="flex items-center gap-4 pt-1 text-[10px] text-[#777]"><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-sm bg-[#39434d]" />Sales</span><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-sm bg-[#c8bba8]" />Gross profit</span></div>
+        </div>
+        <div className="px-4 pb-3 pt-5 sm:px-6">
+          <div className="relative h-56">
+            <div className="pointer-events-none absolute inset-x-0 bottom-7 top-0 flex flex-col justify-between">{[0, 1, 2, 3].map((line) => <div key={line} className="border-t border-[#f0f0f0]" />)}</div>
+            <div className="relative grid h-full grid-cols-12 gap-1 sm:gap-2">
+              {months.map((item) => <div key={item.month} className="flex min-w-0 flex-col items-center justify-end">
+                <div className="flex h-[calc(100%-28px)] w-full items-end justify-center gap-[2px]">
+                  {item.revenue > 0 && <div aria-label={monthLabel.format(new Date(year, item.month - 1, 1)) + " sales " + money(item.revenue)} title={"Sales " + money(item.revenue)} className="w-1/2 max-w-5 rounded-t-[3px] bg-[#39434d] transition-[height] duration-500" style={{ height: Math.max(3, item.revenue / maxRevenue * 100) + "%" }} />}
+                  {item.profit > 0 && <div aria-label={monthLabel.format(new Date(year, item.month - 1, 1)) + " gross profit " + money(item.profit)} title={"Gross profit " + money(item.profit)} className="w-1/2 max-w-5 rounded-t-[3px] bg-[#c8bba8] transition-[height] duration-500" style={{ height: Math.max(3, item.profit / maxRevenue * 100) + "%" }} />}
+                </div>
+                <span className="mb-1 mt-2 text-[8px] text-[#8a8a8a] sm:text-[9px]">{monthLabel.format(new Date(year, item.month - 1, 1))}</span>
+              </div>)}
+            </div>
+            {!profitLoading && profitReport?.totals.orderCount === 0 && <p className="absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-[11px] text-[#888]">No qualifying orders recorded this year.</p>}
+            {profitLoading && <p role="status" className="absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-[11px] text-[#888]">Loading sales data…</p>}
+          </div>
+          <p className="mt-2 text-[10px] text-[#909090]">Gross profit subtracts saved product costs{profitReport?.totals.missingCostItems ? "; some sales are excluded until costs are added" : ""}. <button type="button" onClick={() => onNavigate("Analytics")} className="font-semibold text-[#795c37] hover:text-[#4c3922]">View full report <ArrowUpRight className="ml-0.5 inline" size={11} /></button></p>
+        </div>
+      </PanelCard>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {metrics.map(({ label, value, detail, icon: Icon, action }) => <button type="button" key={label} onClick={() => onNavigate(action)} className="rounded-xl border border-[#e5e5e5] bg-white p-4 text-left transition-colors hover:border-[#b9b9b9] sm:p-5">
+          <div className="flex items-center justify-between gap-3"><p className="text-[11px] font-medium text-[#585858]">{label}</p><Icon size={15} className="shrink-0 text-[#737373]" /></div>
+          <strong className="mt-3 block truncate text-[23px] font-semibold tracking-[-0.03em] text-[#171717] sm:text-[25px]">{((profitLoading && (label === "Sales this month" || label === "Gross profit this month")) || (loading && (label === "All orders" || label === "Pending orders"))) ? "…" : value}</strong>
+          <p className="mt-1 truncate text-[10px] text-[#858585]">{detail}</p>
+        </button>)}
+      </div>
     </div>
-    <PanelCard className="overflow-hidden"><div className="flex items-center justify-between border-b border-[#f0ece6] px-5 py-4"><div><h2 className="text-[13px] font-semibold text-[#34312c]">Recent orders</h2><p className="mt-1 text-[10px] text-[#a09a90]">Latest orders saved in the database</p></div><button type="button" onClick={() => onNavigate("Orders")} className="text-[11px] font-semibold text-[#9b6b38] hover:text-[#6f4c28]">View all <ArrowUpRight className="ml-1 inline" size={13} /></button></div>
-      <div className="overflow-x-auto"><table className="w-full min-w-[580px] text-left"><thead><tr className="bg-white text-[9px] uppercase tracking-[.11em] text-[#948c80]"><th className="px-5 py-3 font-semibold">Order</th><th className="px-3 py-3 font-semibold">Customer</th><th className="px-3 py-3 font-semibold">Total</th><th className="px-5 py-3 font-semibold">Status</th></tr></thead><tbody>{data?.recentOrders.map((order) => <tr key={order.id} className="border-t border-[#f3f0ea] text-[11px]"><td className="px-5 py-3 font-semibold text-[#48443d]">CL-{order.order_number}<p className="mt-1 text-[9px] font-normal text-[#a19a90]">{new Date(order.placed_at).toLocaleDateString("en-BD")}</p></td><td className="px-3 py-3 text-[#5a554d]">{order.customer_name}</td><td className="px-3 py-3 font-medium text-[#38352f]">{money(Math.round(Number(order.total_bdt) * 100))}</td><td className="px-5 py-3"><StatusPill>{order.status.charAt(0).toUpperCase() + order.status.slice(1)}</StatusPill></td></tr>)}</tbody></table></div>
-      {loading && <p role="status" className="p-8 text-center text-xs text-[#928a7f]">Loading overview...</p>}{!loading && !data?.recentOrders.length && <p className="p-8 text-center text-xs text-[#928a7f]">No orders have been saved yet.</p>}
-    </PanelCard>
+    <div className="grid gap-4 xl:grid-cols-[minmax(260px,.78fr)_minmax(0,1.6fr)]">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+        <PanelCard className="p-5">
+          <div><h2 className="text-[14px] font-semibold text-[#252525]">Store at a glance</h2><p className="mt-1 text-[11px] text-[#858585]">Your catalog and customer base</p></div>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            {([{ label: "Products", value: summary?.productCount ?? 0, icon: Package, action: "Products" as PanelKey }, { label: "Customers", value: summary?.customerCount ?? 0, icon: Users, action: "Customers" as PanelKey }]).map(({ label, value, icon: Icon, action }) => <button type="button" key={label} onClick={() => onNavigate(action)} className="rounded-lg border border-[#ededed] p-3 text-left transition-colors hover:border-[#b9b9b9]">
+              <Icon size={15} className="text-[#777]" /><strong className="mt-3 block text-[21px] font-semibold text-[#222]">{loading ? "…" : value.toLocaleString()}</strong><span className="mt-1 block text-[10px] text-[#777]">{label}</span>
+            </button>)}
+          </div>
+        </PanelCard>
+        <PanelCard className="p-5">
+          <h2 className="text-[14px] font-semibold text-[#252525]">Quick actions</h2>
+          <div className="mt-4 grid grid-cols-2 gap-2">{([["Products", Package], ["Categories", Boxes], ["Homepage content", Sparkles], ["Orders", ShoppingBag]] as const).map(([label, Icon]) => <button type="button" key={label} onClick={() => onNavigate(label)} className="flex min-h-11 items-center gap-2 rounded-lg border border-[#ededed] px-3 py-2 text-left text-[10px] font-medium text-[#555] transition-colors hover:border-[#b9b9b9] hover:bg-[#fafafa]"><Icon size={14} className="shrink-0 text-[#737373]" />{label}</button>)}</div>
+        </PanelCard>
+      </div>
+      <PanelCard className="overflow-hidden">
+        <div className="flex items-center justify-between border-b border-[#ededed] px-5 py-4 sm:px-6"><div><h2 className="text-[14px] font-semibold text-[#252525]">Recent orders</h2><p className="mt-1 text-[11px] text-[#858585]">Latest orders saved in your store</p></div><button type="button" onClick={() => onNavigate("Orders")} className="text-[11px] font-semibold text-[#555] hover:text-black">View all <ArrowUpRight className="ml-1 inline" size={13} /></button></div>
+        <div className="overflow-x-auto"><table className="w-full min-w-[580px] text-left"><thead><tr className="bg-[#fafafa] text-[9px] uppercase tracking-[.1em] text-[#858585]"><th className="px-5 py-3 font-semibold">Order</th><th className="px-3 py-3 font-semibold">Customer</th><th className="px-3 py-3 font-semibold">Total</th><th className="px-5 py-3 font-semibold">Status</th></tr></thead><tbody>{data?.recentOrders.map((order) => <tr key={order.id} className="border-t border-[#f0f0f0] text-[11px]"><td className="px-5 py-3 font-semibold text-[#333]">CL-{order.order_number}<p className="mt-1 text-[9px] font-normal text-[#888]">{new Date(order.placed_at).toLocaleDateString("en-BD")}</p></td><td className="px-3 py-3 text-[#555]">{order.customer_name}</td><td className="px-3 py-3 font-medium text-[#333]">{money(Math.round(Number(order.total_bdt) * 100))}</td><td className="px-5 py-3"><StatusPill>{order.status.charAt(0).toUpperCase() + order.status.slice(1)}</StatusPill></td></tr>)}</tbody></table></div>
+        {loading && <p role="status" className="p-8 text-center text-xs text-[#888]">Loading recent orders…</p>}{!loading && !data?.recentOrders.length && <p className="p-8 text-center text-xs text-[#888]">No orders have been saved yet.</p>}
+      </PanelCard>
+    </div>
   </>;
 }
 
 function OrdersPage() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All orders");
+  const [view, setView] = useState<"active" | "archive">("active");
   const [rows, setRows] = useState<AdminOrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -155,7 +223,8 @@ function OrdersPage() {
 
   useEffect(() => {
     let active = true;
-    apiFetch("/api/admin/orders", { cache: "no-store" })
+    setLoading(true);
+    apiFetch("/api/admin/orders?view=" + view, { cache: "no-store" })
       .then(async (response) => {
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "Orders could not be loaded.");
@@ -172,6 +241,7 @@ function OrdersPage() {
           items: (order.order_items ?? []).reduce((sum, item) => sum + Number(item.quantity || 0), 0),
           total: Math.round(Number(order.total_bdt || 0) * 100),
           status: (order.status.charAt(0).toUpperCase() + order.status.slice(1)) as OrderStatus,
+          archivedAt: order.archived_at ?? null,
           paymentStatus: order.payment_status ?? "pending",
           paymentMethod: order.payment_method ?? "",
           refundReference: order.payment_refund_reference ?? "",
@@ -190,7 +260,7 @@ function OrdersPage() {
       .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Orders could not be loaded."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [view]);
 
   const updateStatus = async (id: string, status: OrderStatus) => {
     setSavingId(id);
@@ -236,7 +306,48 @@ function OrdersPage() {
     finally { setSavingId(""); }
   };
 
+  const setOrderArchiveState = async (order: AdminOrderRow, action: "archive" | "restore") => {
+    if (action === "archive" && !window.confirm("Archive " + order.number + "? You can restore it later.")) return;
+    setSavingId(order.id); setError(""); setStatusNotice("");
+    try {
+      const response = await apiFetch("/api/admin/orders", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: order.id, action }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "The order archive could not be updated.");
+      setRows((current) => current.filter((item) => item.id !== order.id));
+      setStatusNotice(action === "archive" ? order.number + " moved to Archive. You can restore it there." : order.number + " restored to active orders.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The order archive could not be updated.");
+    } finally {
+      setSavingId("");
+    }
+  };
+
+  const permanentlyDeleteOrder = async (order: AdminOrderRow) => {
+    if (!window.confirm("Permanently delete " + order.number + "? Its order items, payment record, and status history will also be removed. This cannot be undone.")) return;
+    setSavingId(order.id); setError(""); setStatusNotice("");
+    try {
+      const response = await apiFetch("/api/admin/orders", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: order.id }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "The order could not be permanently deleted.");
+      setRows((current) => current.filter((item) => item.id !== order.id));
+      setStatusNotice(order.number + " was permanently deleted.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The order could not be permanently deleted.");
+    } finally {
+      setSavingId("");
+    }
+  };
+
   const allowedStatuses = (order: AdminOrderRow): OrderStatus[] => {
+    if (view === "archive") return [];
     if (order.status === "Pending") {
       const next: OrderStatus[] = [];
       if (order.paymentMethod === "cod" || order.paymentStatus === "paid") next.push("Confirmed");
@@ -290,6 +401,10 @@ function OrdersPage() {
     <SectionHeading title="Orders" description="Review, fulfill, and keep track of saved customer orders." action={<Button variant="secondary" onClick={() => window.print()}><Download size={14} /> Print</Button>} />
     {error && <p role="alert" className="mb-4 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] text-[#8f493b]">{error}</p>}
     {statusNotice && <p role="status" className="mb-4 rounded-lg border border-[#dce8d8] bg-[#f2f7ef] p-3 text-[11px] text-[#587052]">{statusNotice}</p>}
+    <div className="mb-4 flex gap-2" role="group" aria-label="Order views">
+      <Button variant={view === "active" ? "primary" : "secondary"} onClick={() => setView("active")}>Active orders</Button>
+      <Button variant={view === "archive" ? "primary" : "secondary"} onClick={() => setView("archive")}>Archive</Button>
+    </div>
     <PanelCard>
       <div className="flex flex-wrap items-center gap-2 border-b border-[#f0ece6] p-4">
         <div className="w-full sm:max-w-[300px]"><SearchField value={query} onChange={setQuery} placeholder="Search by order or customer?" /></div>
@@ -301,7 +416,7 @@ function OrdersPage() {
       </div>
       <div className="hidden overflow-x-auto sm:block">
         <table className="w-full min-w-[1040px] text-left">
-          <thead className="bg-white text-[9px] uppercase tracking-[.1em] text-[#948c80]"><tr>{["Order", "Customer", "Date", "Items", "Total", "Payment", "Status", "Courier"].map((label) => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead>
+          <thead className="bg-white text-[9px] uppercase tracking-[.1em] text-[#948c80]"><tr>{["Order", "Customer", "Date", "Items", "Total", "Payment", "Status", "Courier", "Actions"].map((label) => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead>
           <tbody>
             {filtered.map((order) => <tr key={order.id} className="border-t border-[#f3f0ea] text-[11px] hover:bg-white">
               <td className="px-4 py-4 font-semibold text-[#48443d]">{order.number}</td>
@@ -309,9 +424,10 @@ function OrdersPage() {
               <td className="px-4 py-4 text-[#756f65]">{order.date}</td>
               <td className="px-4 py-4 text-[#756f65]">{order.items} items</td>
               <td className="px-4 py-4 font-semibold text-[#48443d]">{money(order.total)}</td>
-              <td className="px-4 py-4 text-[#756f65]"><span>{order.method}</span><span className="mt-1 block text-[9px] capitalize">Payment: {order.paymentStatus.replaceAll("_", " ")}</span>{order.paymentStatus === "paid" && ["Delivered", "Cancelled"].includes(order.status) && <button type="button" disabled={savingId === order.id} onClick={() => openRefund(order)} className="mt-1 rounded border border-[#e9e4dc] px-2 py-1 text-[9px] text-[#8d6437] disabled:opacity-50">Record refund</button>}</td>
-              <td className="px-4 py-4"><select aria-label={"Status for " + order.number} disabled={savingId === order.id || allowedStatuses(order).length === 0} value={order.status} onChange={(event) => updateStatus(order.id, event.target.value as OrderStatus)} className="rounded-md border border-[#e9e4dc] bg-white px-2 py-1.5 text-[10px] text-[#48443d] disabled:opacity-60"><option value={order.status}>{order.status}</option>{allowedStatuses(order).map((status) => <option key={status}>{status}</option>)}</select>{order.events[0] && <p className="mt-1 max-w-[150px] text-[9px] text-[#928a7e]">Updated {new Date(order.events[0].created_at).toLocaleString("en-BD")} by {order.events[0].actor_email}</p>}{order.paymentStatus === "refunded" && order.refundReference && <p className="mt-1 text-[9px] text-[#587052]">Refund ref: {order.refundReference}</p>}</td>
-              <td className="px-4 py-3"><div className="text-[9px] text-[#625d55]">{order.courierStatus.replaceAll("_", " ")}</div>{order.trackingCode && <div className="mt-1 font-mono text-[9px] text-[#8d6437]">{order.trackingCode}</div>}{order.returnStatus && <div className="mt-1 text-[9px] text-[#716a60]">Return: {order.returnStatus.replaceAll("_", " ")}</div>}<button type="button" disabled={courierBusyId === order.id} onClick={() => void updateCourier(order)} className="mt-1.5 rounded border border-[#e9e4dc] px-2 py-1 text-[9px] text-[#6e5737] disabled:opacity-50">{courierBusyId === order.id ? "Working…" : ["not_submitted", "failed"].includes(order.courierStatus) ? "Create shipment" : "Sync status"}</button>{["delivered", "partial_delivered"].includes(order.courierStatus) && !order.returnStatus && <button type="button" disabled={courierBusyId === order.id} onClick={() => void updateCourier(order, "return")} className="ml-1.5 mt-1.5 rounded border border-[#e9e4dc] px-2 py-1 text-[9px] text-[#6e5737] disabled:opacity-50">Request return</button>}</td>
+              <td className="px-4 py-4 text-[#756f65]"><span>{order.method}</span><span className="mt-1 block text-[9px] capitalize">Payment: {order.paymentStatus.replaceAll("_", " ")}</span>{view === "active" && order.paymentStatus === "paid" && ["Delivered", "Cancelled"].includes(order.status) && <button type="button" disabled={savingId === order.id} onClick={() => openRefund(order)} className="mt-1 rounded border border-[#e9e4dc] px-2 py-1 text-[9px] text-[#8d6437] disabled:opacity-50">Record refund</button>}</td>
+              <td className="px-4 py-4"><select aria-label={"Status for " + order.number} disabled={view === "archive" || savingId === order.id || allowedStatuses(order).length === 0} value={order.status} onChange={(event) => updateStatus(order.id, event.target.value as OrderStatus)} className="rounded-md border border-[#e9e4dc] bg-white px-2 py-1.5 text-[10px] text-[#48443d] disabled:opacity-60"><option value={order.status}>{order.status}</option>{allowedStatuses(order).map((status) => <option key={status}>{status}</option>)}</select>{order.events[0] && <p className="mt-1 max-w-[150px] text-[9px] text-[#928a7e]">Updated {new Date(order.events[0].created_at).toLocaleString("en-BD")} by {order.events[0].actor_email}</p>}{order.paymentStatus === "refunded" && order.refundReference && <p className="mt-1 text-[9px] text-[#587052]">Refund ref: {order.refundReference}</p>}</td>
+              <td className="px-4 py-3"><div className="text-[9px] text-[#625d55]">{order.courierStatus.replaceAll("_", " ")}</div>{order.trackingCode && <div className="mt-1 font-mono text-[9px] text-[#8d6437]">{order.trackingCode}</div>}{order.returnStatus && <div className="mt-1 text-[9px] text-[#716a60]">Return: {order.returnStatus.replaceAll("_", " ")}</div>}{view === "active" && <><button type="button" disabled={courierBusyId === order.id || savingId === order.id} onClick={() => void updateCourier(order)} className="mt-1.5 rounded border border-[#e9e4dc] px-2 py-1 text-[9px] text-[#6e5737] disabled:opacity-50">{courierBusyId === order.id ? "Working…" : ["not_submitted", "failed"].includes(order.courierStatus) ? "Create shipment" : "Sync status"}</button>{["delivered", "partial_delivered"].includes(order.courierStatus) && !order.returnStatus && <button type="button" disabled={courierBusyId === order.id || savingId === order.id} onClick={() => void updateCourier(order, "return")} className="ml-1.5 mt-1.5 rounded border border-[#e9e4dc] px-2 py-1 text-[9px] text-[#6e5737] disabled:opacity-50">Request return</button>}</>}</td>
+              <td className="px-4 py-3"><div className="flex flex-col items-start gap-1"><button type="button" disabled={savingId === order.id} onClick={() => void setOrderArchiveState(order, view === "active" ? "archive" : "restore")} className="rounded px-2 py-1 text-[10px] font-semibold text-[#705a3c] hover:bg-[#f7f5f0] disabled:opacity-50">{savingId === order.id ? "Saving…" : view === "active" ? "Archive" : "Restore"}</button>{view === "archive" && <button type="button" disabled={savingId === order.id} onClick={() => void permanentlyDeleteOrder(order)} className="rounded px-2 py-1 text-[10px] font-semibold text-[#9d5548] hover:bg-[#fbefec] disabled:opacity-50">Delete permanently</button>}</div></td>
             </tr>)}
           </tbody>
         </table>
@@ -322,13 +438,14 @@ function OrdersPage() {
         {filtered.map((order) => <article key={order.id} className="min-w-0 rounded-lg border border-[#eee8df] p-3">
           <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-[11px] font-semibold text-[#48443d]">{order.number}</p><p className="mt-1 break-words text-[12px] font-medium text-[#34312c]">{order.customer}</p><p className="mt-1 break-all text-[10px] text-[#8c857b]">{order.email}</p></div><p className="shrink-0 text-[11px] font-semibold text-[#48443d]">{money(order.total)}</p></div>
           <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[#8c857b]"><span>{order.date}</span><span>{order.items} items</span><span>{order.method}</span></div>
-          <p className="mt-3 text-[10px] text-[#716a60]">Payment: <span className="capitalize">{order.paymentStatus}</span></p><label className="mt-3 block text-[10px] font-medium text-[#716a60]">Order status<select aria-label={"Status for " + order.number} disabled={savingId === order.id || allowedStatuses(order).length === 0} value={order.status} onChange={(event) => updateStatus(order.id, event.target.value as OrderStatus)} className="mt-1.5 h-11 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[12px] text-[#48443d] disabled:opacity-60"><option value={order.status}>{order.status}</option>{allowedStatuses(order).map((status) => <option key={status}>{status}</option>)}</select></label>{order.events[0] && <p className="mt-2 text-[9px] text-[#928a7e]">Updated {new Date(order.events[0].created_at).toLocaleString("en-BD")} by {order.events[0].actor_email}</p>}{order.paymentStatus === "paid" && ["Delivered", "Cancelled"].includes(order.status) && <button type="button" disabled={savingId === order.id} onClick={() => openRefund(order)} className="mt-2 min-h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] font-medium text-[#8d6437] disabled:opacity-50">Record refund</button>}
-          <div className="mt-3 rounded-lg bg-[#f8f6f2] p-3"><p className="text-[10px] font-medium capitalize text-[#625d55]">Courier: {order.courierStatus.replaceAll("_", " ")}</p>{order.trackingCode && <p className="mt-1 break-all font-mono text-[10px] text-[#8d6437]">{order.trackingCode}</p>}{order.returnStatus && <p className="mt-1 text-[10px] text-[#716a60]">Return: {order.returnStatus.replaceAll("_", " ")}</p>}<button type="button" disabled={courierBusyId === order.id} onClick={() => void updateCourier(order)} className="mt-2 min-h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] font-medium text-[#6e5737] disabled:opacity-50">{courierBusyId === order.id ? "Working…" : ["not_submitted", "failed"].includes(order.courierStatus) ? "Create shipment" : "Sync status"}</button>{["delivered", "partial_delivered"].includes(order.courierStatus) && !order.returnStatus && <button type="button" disabled={courierBusyId === order.id} onClick={() => void updateCourier(order, "return")} className="mt-2 min-h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] font-medium text-[#6e5737] disabled:opacity-50">Request return</button>}</div>
+          <p className="mt-3 text-[10px] text-[#716a60]">Payment: <span className="capitalize">{order.paymentStatus}</span></p><label className="mt-3 block text-[10px] font-medium text-[#716a60]">Order status<select aria-label={"Status for " + order.number} disabled={view === "archive" || savingId === order.id || allowedStatuses(order).length === 0} value={order.status} onChange={(event) => updateStatus(order.id, event.target.value as OrderStatus)} className="mt-1.5 h-11 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[12px] text-[#48443d] disabled:opacity-60"><option value={order.status}>{order.status}</option>{allowedStatuses(order).map((status) => <option key={status}>{status}</option>)}</select></label>{order.events[0] && <p className="mt-2 text-[9px] text-[#928a7e]">Updated {new Date(order.events[0].created_at).toLocaleString("en-BD")} by {order.events[0].actor_email}</p>}{view === "active" && order.paymentStatus === "paid" && ["Delivered", "Cancelled"].includes(order.status) && <button type="button" disabled={savingId === order.id} onClick={() => openRefund(order)} className="mt-2 min-h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] font-medium text-[#8d6437] disabled:opacity-50">Record refund</button>}
+          <div className="mt-3 rounded-lg bg-[#f8f6f2] p-3"><p className="text-[10px] font-medium capitalize text-[#625d55]">Courier: {order.courierStatus.replaceAll("_", " ")}</p>{order.trackingCode && <p className="mt-1 break-all font-mono text-[10px] text-[#8d6437]">{order.trackingCode}</p>}{order.returnStatus && <p className="mt-1 text-[10px] text-[#716a60]">Return: {order.returnStatus.replaceAll("_", " ")}</p>}{view === "active" && <><button type="button" disabled={courierBusyId === order.id || savingId === order.id} onClick={() => void updateCourier(order)} className="mt-2 min-h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] font-medium text-[#6e5737] disabled:opacity-50">{courierBusyId === order.id ? "Working…" : ["not_submitted", "failed"].includes(order.courierStatus) ? "Create shipment" : "Sync status"}</button>{["delivered", "partial_delivered"].includes(order.courierStatus) && !order.returnStatus && <button type="button" disabled={courierBusyId === order.id || savingId === order.id} onClick={() => void updateCourier(order, "return")} className="mt-2 min-h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] font-medium text-[#6e5737] disabled:opacity-50">Request return</button>}</>}</div>
+          <div className="mt-3 flex gap-2"><Button variant="secondary" className="flex-1" disabled={savingId === order.id} onClick={() => void setOrderArchiveState(order, view === "active" ? "archive" : "restore")}>{savingId === order.id ? "Saving…" : view === "active" ? "Archive" : "Restore"}</Button>{view === "archive" && <Button variant="quiet" className="flex-1 text-[#9d5548]" disabled={savingId === order.id} onClick={() => void permanentlyDeleteOrder(order)}>Delete</Button>}</div>
         </article>)}
         {loading && <div role="status" className="p-8 text-center text-xs text-[#928a7f]">Loading orders...</div>}
         {!loading && filtered.length === 0 && <div className="p-8 text-center text-xs text-[#928a7f]">{error ? "Orders are unavailable." : "No matching orders."}</div>}
       </div>
-      <div className="flex items-center justify-between border-t border-[#f0ece6] px-4 py-3 text-[10px] text-[#958e83]">Showing {filtered.length} of {rows.length} orders</div>
+      <div className="flex items-center justify-between border-t border-[#f0ece6] px-4 py-3 text-[10px] text-[#958e83]">Showing {filtered.length} {view === "archive" ? "archived " : ""}orders</div>
     </PanelCard>
     {refundOrder && <div role="presentation" className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && savingId !== refundOrder.id) setRefundOrder(null); }}><form role="dialog" aria-modal="true" aria-labelledby="refund-title" onSubmit={recordRefund} className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl sm:p-6"><h2 id="refund-title" className="text-base font-semibold text-[#282722]">Record refund · {refundOrder.number}</h2><p className="mt-2 text-[11px] leading-5 text-[#716a60]">First complete the refund through your payment provider or manual payment channel. This action records its result in your store; it does not move money.</p>{error && <p role="alert" className="mt-3 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] text-[#8f493b]">{error}</p>}<label className="mt-4 block text-[10px] font-medium text-[#716a60]">Refund transaction reference<input required maxLength={120} value={refundReference} onChange={(event) => setRefundReference(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-[#e9e4dc] px-3 text-[11px] outline-none focus:border-[#c9a06a]" /></label><label className="mt-4 flex items-start gap-2 text-[10px] leading-4 text-[#625d55]"><input required type="checkbox" checked={refundConfirmed} onChange={(event) => setRefundConfirmed(event.target.checked)} className="mt-0.5" />I confirm the refund has completed and this reference is from the payment provider or bank.</label><div className="mt-5 flex justify-end gap-2"><Button variant="secondary" onClick={() => setRefundOrder(null)} disabled={savingId === refundOrder.id}>Cancel</Button><Button type="submit" disabled={savingId === refundOrder.id || !refundReference.trim() || !refundConfirmed}>{savingId === refundOrder.id ? "Saving…" : "Record completed refund"}</Button></div></form></div>}
   </>;
@@ -641,7 +758,7 @@ function ReviewsPage() {
       <div className="flex flex-wrap items-center gap-3 border-b border-[#f0ece6] p-4"><label className="text-[10px] font-medium text-[#716a60]">Show <select value={filter} onChange={(event) => setFilter(event.target.value)} className="ml-2 h-9 rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] text-[#454139]"><option value="all">All reviews</option><option value="pending">Awaiting approval</option><option value="published">Published</option><option value="hidden">Hidden</option></select></label><span className="ml-auto text-[10px] text-[#9a9388]">{items.length} total reviews</span></div>
       {(error || notice) && <p role={error ? "alert" : "status"} className={`mx-4 mt-4 rounded-lg px-3 py-2.5 text-[11px] ${error ? "bg-[#fbefec] text-[#9d5548]" : "bg-[#f1f6ee] text-[#587052]"}`}>{error || notice}</p>}
       {loading ? <div className="p-10 text-center text-xs text-[#928a7f]">Loading customer reviews…</div> : filtered.length === 0 ? <div className="p-10 text-center"><p className="text-[13px] font-medium text-[#48443d]">{error ? "Reviews are not connected" : "No reviews here yet"}</p><p className="mt-1 text-[11px] text-[#928a7f]">{error || "Customer submissions will appear here for approval."}</p></div> : <div className="divide-y divide-[#f3f0ea]">{filtered.map((review) => {
-        const productName = PRODUCTS.find((product) => product.id === review.product_slug)?.name ?? review.product_slug ?? "Product";
+        const productName = review.product_slug?.split("-").filter(Boolean).map((part) => part[0].toUpperCase() + part.slice(1)).join(" ") || "Product";
         return <article key={review.id} className="p-4 sm:p-5"><div className="flex flex-wrap items-start gap-3"><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-[11px] font-semibold text-[#91683b]">{review.customer_name.slice(0, 1).toUpperCase()}</div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-x-2 gap-y-1"><p className="text-[12px] font-semibold text-[#454139]">{review.customer_name}</p><span className="text-[10px] text-[#aaa297]">· {new Date(review.created_at).toLocaleDateString("en-BD", { year: "numeric", month: "short", day: "numeric" })} · {productName}</span></div><p className="mt-2 text-[11px] font-medium tracking-[.06em] text-[#b88a45]">{"★".repeat(review.rating)}<span className="text-[#e8e2d8]">{"★".repeat(5 - review.rating)}</span><span className="ml-2 tracking-normal text-[#827b70]">{review.rating}/5</span></p>{review.title && <h3 className="mt-2 text-[12px] font-semibold text-[#454139]">{review.title}</h3>}<p className="mt-1.5 whitespace-pre-wrap text-[12px] leading-5 text-[#6f695f]">{review.body}</p></div><StatusPill>{review.status === "published" ? "Published" : review.status === "pending" ? "Pending" : "Hidden"}</StatusPill></div><div className="mt-4 flex flex-wrap justify-end gap-2">{review.status !== "published" && <Button disabled={busyId === review.id} onClick={() => void moderate(review, "published")}><Check size={14} /> Approve &amp; publish</Button>}{review.status !== "hidden" && <Button variant="secondary" disabled={busyId === review.id} onClick={() => void moderate(review, "hidden")}><X size={14} /> Hide</Button>}{review.status !== "pending" && <Button variant="quiet" disabled={busyId === review.id} onClick={() => void moderate(review, "pending")}>Return to pending</Button>}</div></article>;
       })}</div>}
     </PanelCard>
@@ -649,11 +766,12 @@ function ReviewsPage() {
 }
 
 function CustomRequestsPage() {
-  const [requests, setRequests] = useState(demoRequests);
+  const [requests, setRequests] = useState<CustomRequestRecord[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All requests");
+  const [view, setView] = useState<"active" | "archive">("active");
   const [selected, setSelected] = useState<CustomRequestRecord | null>(null);
-  const [source, setSource] = useState<"preview" | "live">("preview");
+  const [source, setSource] = useState<"loading" | "unavailable" | "live">("loading");
   const [notice, setNotice] = useState("Loading submitted requests…");
   const [refreshKey, setRefreshKey] = useState(0);
   const [statusError, setStatusError] = useState("");
@@ -662,8 +780,9 @@ function CustomRequestsPage() {
 
   useEffect(() => {
     let active = true;
+    setSource("loading");
     setNotice("Loading submitted requests…");
-    apiFetch("/api/custom-requests", { cache: "no-store" })
+    apiFetch("/api/custom-requests?view=" + view, { cache: "no-store" })
       .then(async (response) => {
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || "Could not load requests.");
@@ -675,20 +794,39 @@ function CustomRequestsPage() {
         setSource("live");
         setNotice("");
       })
-      .catch(() => {
-        if (active) setNotice("Showing sample requests. Configure Supabase and sign in as an admin to see customer submissions.");
+      .catch((reason) => {
+        if (active) {
+          setRequests([]);
+          setSource("unavailable");
+          setNotice(reason instanceof Error ? reason.message : "Customer requests could not be loaded. Check the database connection and try again.");
+        }
       });
     return () => { active = false; };
-  }, [refreshKey]);
+  }, [refreshKey, view]);
 
-  const filtered = requests.filter((request) => {
-    const matchesText = `${request.request_number} ${request.full_name} ${request.email ?? ""} ${request.phone}`.toLowerCase().includes(query.toLowerCase());
+  const viewRequests = requests.filter((request) => Boolean(request.archived_at) === (view === "archive"));
+  const filtered = viewRequests.filter((request) => {
+    const matchesText = [request.request_number, request.full_name, request.email ?? "", request.phone].join(" ").toLowerCase().includes(query.toLowerCase());
     return matchesText && (filter === "All requests" || request.status.toLowerCase() === filter.toLowerCase());
   });
   const displayStatus = (status: string) => status.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
   const displayDate = (date: string) => new Date(date).toLocaleString("en-BD", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+  const requestStatusOptions = (request: CustomRequestRecord) => {
+    const next: Record<string, string[]> = {
+      new: ["reviewing", "declined", "cancelled"],
+      pending: ["reviewing", "confirmed", "declined", "cancelled"],
+      reviewing: ["quoted", "declined", "cancelled"],
+      quoted: ["confirmed", "declined", "cancelled"],
+      confirmed: ["processing", "cancelled"],
+      processing: ["shipped", "completed", "cancelled"],
+      shipped: ["delivered"],
+      delivered: ["completed"],
+    };
+    return [...new Set([request.status, ...(next[request.status] ?? [])])];
+  };
+
   const changeRequestStatus = async (request: CustomRequestRecord, status: string) => {
-    if (source !== "live" || status === request.status) return;
+    if (source !== "live" || view === "archive" || status === request.status) return;
     const quoteValue = status === "quoted" ? window.prompt("Enter the customer quote amount in BDT:", request.quoted_price_bdt == null ? "" : String(request.quoted_price_bdt)) : null;
     if (status === "quoted" && (quoteValue == null || !quoteValue.trim() || !Number.isFinite(Number(quoteValue)) || Number(quoteValue) < 0)) return;
     setSavingStatusId(request.id);
@@ -705,24 +843,141 @@ function CustomRequestsPage() {
       const event: StatusEvent = { id: crypto.randomUUID(), from_status: request.status, to_status: status, actor_email: "You", note: null, created_at: new Date().toISOString() };
       setRequests((current) => current.map((item) => item.id === request.id ? { ...item, status, quoted_price_bdt: status === "quoted" ? Number(quoteValue) : item.quoted_price_bdt, custom_request_status_events: [event, ...(item.custom_request_status_events ?? [])] } : item));
       setSelected((current) => current?.id === request.id ? { ...current, status, quoted_price_bdt: status === "quoted" ? Number(quoteValue) : current.quoted_price_bdt, custom_request_status_events: [event, ...(current.custom_request_status_events ?? [])] } : current);
-      setStatusSuccess(status === "quoted" ? `Quote saved for request CR-${request.request_number}.` : `Request status updated to ${displayStatus(status)}.`);
+      setStatusSuccess(status === "quoted" ? "Quote saved for request CR-" + request.request_number + "." : "Request status updated to " + displayStatus(status) + ".");
     } catch (reason) {
       setStatusError(reason instanceof Error ? reason.message : "Request status could not be updated.");
     } finally {
       setSavingStatusId("");
     }
   };
-  const requestStatusOptions = (request: CustomRequestRecord) => {
-    const next: Record<string, string[]> = { new: ["reviewing", "declined", "cancelled"], pending: ["reviewing", "confirmed", "declined", "cancelled"], reviewing: ["quoted", "declined", "cancelled"], quoted: ["confirmed", "declined", "cancelled"], confirmed: ["processing", "cancelled"], processing: ["shipped", "completed", "cancelled"], shipped: ["delivered"], delivered: ["completed"] };
-    return [...new Set([request.status, ...(next[request.status] ?? [])])];
+
+  const setRequestArchiveState = async (request: CustomRequestRecord, action: "archive" | "restore") => {
+    if (source !== "live") return;
+    if (action === "archive" && !window.confirm("Archive request CR-" + request.request_number + "? You can restore it later.")) return;
+    setSavingStatusId(request.id);
+    setStatusError("");
+    setStatusSuccess("");
+    try {
+      const response = await apiFetch("/api/custom-requests", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: request.id, action }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "The request archive could not be updated.");
+      setRequests((current) => current.map((item) => item.id === request.id ? { ...item, archived_at: action === "archive" ? new Date().toISOString() : null } : item));
+      setSelected((current) => current?.id === request.id ? null : current);
+      setStatusSuccess(action === "archive" ? "Request moved to Archive. You can restore it there." : "Request restored to the active inbox.");
+    } catch (reason) {
+      setStatusError(reason instanceof Error ? reason.message : "The request archive could not be updated.");
+    } finally {
+      setSavingStatusId("");
+    }
   };
+
+  const permanentlyDeleteRequest = async (request: CustomRequestRecord) => {
+    if (source !== "live" || !window.confirm("Permanently delete request CR-" + request.request_number + " and its reference photos? This cannot be undone.")) return;
+    setSavingStatusId(request.id);
+    setStatusError("");
+    setStatusSuccess("");
+    try {
+      const response = await apiFetch("/api/custom-requests", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: request.id }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "The request could not be permanently deleted.");
+      setRequests((current) => current.filter((item) => item.id !== request.id));
+      setSelected((current) => current?.id === request.id ? null : current);
+      setStatusSuccess(result.warning || "Request and its reference photos were permanently deleted.");
+    } catch (reason) {
+      setStatusError(reason instanceof Error ? reason.message : "The request could not be permanently deleted.");
+    } finally {
+      setSavingStatusId("");
+    }
+  };
+
+  const requestActions = (request: CustomRequestRecord) => (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <button type="button" onClick={() => setSelected(request)} className="rounded-md px-2 py-1.5 text-[10px] font-semibold text-[#8d6437] hover:bg-white"><Eye size={13} className="mr-1 inline" />View</button>
+      {view === "active"
+        ? <button type="button" disabled={source !== "live" || savingStatusId === request.id} onClick={() => void setRequestArchiveState(request, "archive")} className="rounded-md px-2 py-1.5 text-[10px] font-semibold text-[#705a3c] hover:bg-white disabled:opacity-50">{savingStatusId === request.id ? "Saving?" : "Archive"}</button>
+        : <>
+          <button type="button" disabled={source !== "live" || savingStatusId === request.id} onClick={() => void setRequestArchiveState(request, "restore")} className="rounded-md px-2 py-1.5 text-[10px] font-semibold text-[#587052] hover:bg-white disabled:opacity-50">{savingStatusId === request.id ? "Saving?" : "Restore"}</button>
+          <button type="button" disabled={source !== "live" || savingStatusId === request.id} onClick={() => void permanentlyDeleteRequest(request)} className="rounded-md px-2 py-1.5 text-[10px] font-semibold text-[#9d5548] hover:bg-[#fbefec] disabled:opacity-50">Delete permanently</button>
+        </>}
+    </div>
+  );
 
   return <>
     <SectionHeading title="Custom requests" description="Customer ideas, reference photos, and contact details in one inbox." action={<Button variant="secondary" onClick={() => setRefreshKey((key) => key + 1)}><Activity size={14} /> Refresh inbox</Button>} />
-    {notice && <div className={`mb-4 rounded-lg border px-4 py-3 text-[11px] ${source === "preview" && notice.startsWith("Showing") ? "border-[#e9dfcd] bg-white text-[#806b4a]" : "border-[#ece6dd] bg-white text-[#8b8479]"}`}>{notice}</div>}
-    <div className="mb-4 grid gap-3 sm:grid-cols-3">{[{ label: "Total requests", value: source === "live" ? String(requests.length) : "3" }, { label: "New to review", value: String(requests.filter((request) => request.status === "new").length) }, { label: "With reference photos", value: String(requests.filter((request) => request.images.length > 0).length) }].map((item) => <PanelCard key={item.label} className="p-4"><p className="text-[10px] text-[#8f887e]">{item.label}</p><p className="mt-2 text-[20px] font-semibold text-[#34312c]">{item.value}</p></PanelCard>)}</div>
-    <PanelCard><div className="flex flex-wrap items-center gap-2 border-b border-[#f0ece6] p-4"><div className="w-full sm:max-w-[320px]"><SearchField value={query} onChange={setQuery} placeholder="Search name, email, or request…" /></div><select value={filter} onChange={(event) => setFilter(event.target.value)} className="h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] text-[#5a554d] outline-none sm:w-auto"><option>All requests</option><option value="new">New</option><option value="reviewing">Reviewing</option><option value="quoted">Quoted</option><option value="completed">Completed</option><option value="declined">Declined</option><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="processing">Processing</option><option value="shipped">Shipped</option><option value="delivered">Delivered</option><option value="cancelled">Cancelled</option><option value="refunded">Refunded</option></select><span className="ml-auto text-[10px] text-[#9a9388]">{filtered.length} requests</span></div><div className="hidden overflow-x-auto sm:block"><table className="w-full min-w-[760px] text-left"><thead className="bg-white text-[9px] uppercase tracking-[.1em] text-[#948c80]"><tr>{["Request", "Customer", "Submitted", "References", "Status", ""].map((label) => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead><tbody>{filtered.map((request) => <tr key={request.id} className="border-t border-[#f3f0ea] text-[11px] hover:bg-white"><td className="px-4 py-4 font-semibold text-[#48443d]">CR-{String(request.request_number).replace(/^CR-/, "")}<p className="mt-1 max-w-[210px] truncate text-[9px] font-normal text-[#9c958a]">{request.description}</p></td><td className="px-4 py-4"><p className="font-medium text-[#48443d]">{request.full_name}</p><p className="mt-1 text-[9px] text-[#9c958a]">{request.phone}</p></td><td className="px-4 py-4 text-[#756f65]">{displayDate(request.created_at)}</td><td className="px-4 py-4 text-[#756f65]">{request.images.length ? `${request.images.length} photo${request.images.length > 1 ? "s" : ""}` : "None"}</td><td className="px-4 py-4"><select aria-label={"Status for request " + request.request_number} value={request.status} disabled={source !== "live" || savingStatusId === request.id} onChange={(event) => void changeRequestStatus(request, event.target.value)} className="h-9 max-w-full rounded-md border border-[#e9e4dc] bg-white px-2 text-[10px] text-[#48443d] disabled:opacity-60">{requestStatusOptions(request).map((status) => <option key={status} value={status}>{displayStatus(status)}</option>)}</select></td><td className="px-4 py-4"><button onClick={() => setSelected(request)} className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-[10px] font-semibold text-[#8d6437] hover:bg-white"><Eye size={13} /> View</button></td></tr>)}</tbody></table>{filtered.length === 0 && <div className="p-10 text-center text-xs text-[#928a7f]">No requests match your search.</div>}</div></PanelCard>
-    {statusError && <p role="alert" className="mb-4 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] text-[#8f493b]">{statusError}</p>}{statusSuccess && <p role="status" className="mb-4 rounded-lg border border-[#dce8d8] bg-[#f2f7ef] p-3 text-[11px] text-[#587052]">{statusSuccess}</p>}<div className="space-y-3 p-3 sm:hidden">{filtered.map((request) => <article key={request.id} className="min-w-0 rounded-lg border border-[#eee8df] p-3"><div className="flex min-w-0 items-start justify-between gap-3"><div className="min-w-0"><p className="text-[11px] font-semibold text-[#48443d]">CR-{String(request.request_number).replace(/^CR-/, "")}</p><p className="mt-1 break-words text-[12px] font-medium text-[#34312c]">{request.full_name}</p><p className="mt-1 break-all text-[10px] text-[#8c857b]">{request.phone}{request.email ? " · " + request.email : ""}</p></div><span className="shrink-0 text-[9px] text-[#8c857b]">{request.images.length} photo{request.images.length === 1 ? "" : "s"}</span></div><p className="mt-2 text-[10px] text-[#8c857b]">{displayDate(request.created_at)}</p><label className="mt-3 block text-[10px] font-medium text-[#716a60]">Request status<select aria-label={"Status for request " + request.request_number} value={request.status} disabled={source !== "live" || savingStatusId === request.id} onChange={(event) => void changeRequestStatus(request, event.target.value)} className="mt-1.5 h-11 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[12px] text-[#48443d] disabled:opacity-60">{requestStatusOptions(request).map((status) => <option key={status} value={status}>{displayStatus(status)}</option>)}</select></label><button onClick={() => setSelected(request)} className="mt-2 flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-[#e9e4dc] px-3 text-[11px] font-semibold text-[#8d6437]"><Eye size={14} /> View request</button></article>)}{filtered.length === 0 && <div className="p-8 text-center text-xs text-[#928a7f]">No requests match your search.</div>}</div>{selected && <div role="presentation" className="fixed inset-0 z-50 flex justify-end bg-[#28241f]/35 backdrop-blur-[1px]" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null); }}><aside role="dialog" aria-modal="true" aria-label={`Request from ${selected.full_name}`} className="h-full w-full max-w-2xl overflow-y-auto bg-white shadow-2xl"><div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-[#ece6dd] bg-white/95 px-4 py-3 backdrop-blur sm:px-7 sm:py-4"><div><p className="text-[9px] font-medium uppercase tracking-[.15em] text-[#a77b47]">Custom request</p><h2 className="mt-1 text-[18px] font-semibold text-[#302d27]">CR-{String(selected.request_number).replace(/^CR-/, "")}</h2></div><div className="flex items-center gap-2"><select aria-label="Custom request status" value={selected.status} disabled={source !== "live" || savingStatusId === selected.id} onChange={(event) => void changeRequestStatus(selected, event.target.value)} className="h-10 max-w-[185px] rounded-lg border border-[#e9e4dc] bg-white px-2 text-[11px] text-[#48443d] disabled:opacity-60">{requestStatusOptions(selected).map((status) => <option key={status} value={status}>{displayStatus(status)}</option>)}</select><button aria-label="Close request" onClick={() => setSelected(null)} className="rounded-md p-2 text-[#827b70] hover:bg-white"><X size={16} /></button></div></div><div className="space-y-4 p-3 sm:space-y-5 sm:p-7"><PanelCard className="p-4 sm:p-5"><h3 className="text-[12px] font-semibold text-[#34312c]">Customer information</h3><div className="mt-4 grid gap-x-5 gap-y-4 sm:grid-cols-2">{[{ label: "Full name", value: selected.full_name }, { label: "Phone number", value: selected.phone }, { label: "Email address", value: selected.email || "Not provided" }, { label: "City / area", value: selected.city_area }].map((field) => <div key={field.label}><p className="text-[9px] uppercase tracking-[.1em] text-[#a09a90]">{field.label}</p><p className="mt-1 break-words text-[11px] font-medium text-[#48443d]">{field.value}</p></div>)}<div className="sm:col-span-2"><p className="text-[9px] uppercase tracking-[.1em] text-[#a09a90]">Delivery address</p><p className="mt-1 text-[11px] font-medium text-[#48443d]">{selected.delivery_address}</p></div></div></PanelCard>{selected.quoted_price_bdt != null && <PanelCard className="p-4"><p className="text-[10px] uppercase tracking-[.1em] text-[#a09a90]">Current quote</p><p className="mt-1 text-[16px] font-semibold text-[#34312c]">{money(Number(selected.quoted_price_bdt))}</p></PanelCard>}{selected.custom_request_status_events?.length ? <PanelCard className="p-4"><h3 className="text-[12px] font-semibold text-[#34312c]">Status history</h3><ol className="mt-3 space-y-2">{[...selected.custom_request_status_events].sort((a,b) => a.created_at.localeCompare(b.created_at)).map((event) => <li key={event.id} className="border-l border-[#DBD5C7] pl-3 text-[10px]"><p className="font-medium capitalize text-[#48443d]">{event.to_status} <span className="font-normal text-[#928a7e]">· {new Date(event.created_at).toLocaleString("en-BD")} by {event.actor_email}</span></p>{event.note && <p className="mt-1 text-[#777168]">{event.note}</p>}</li>)}</ol></PanelCard> : null}<PanelCard className="p-5"><div className="flex items-center justify-between"><h3 className="text-[12px] font-semibold text-[#34312c]">Request description</h3><span className="text-[9px] text-[#a09a90]">Submitted {displayDate(selected.created_at)}</span></div><p className="mt-3 whitespace-pre-wrap text-[12px] leading-6 text-[#625d55]">{selected.description}</p></PanelCard><PanelCard className="p-5"><div className="flex items-center justify-between"><h3 className="text-[12px] font-semibold text-[#34312c]">Reference photos</h3><span className="text-[9px] text-[#a09a90]">{selected.images.length} attached</span></div>{selected.images.length ? <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">{selected.images.map((image) => <a key={image.id} href={image.signed_url || "#"} target="_blank" rel="noreferrer" className="group overflow-hidden rounded-lg border border-[#ece6dd] bg-white"><div className="aspect-square overflow-hidden"><img src={image.signed_url || ""} alt={image.file_name} className="h-full w-full object-cover transition duration-300 group-hover:scale-105" /></div><p className="truncate px-2.5 py-2 text-[9px] text-[#777168]">{image.file_name}</p></a>)}</div> : <p className="mt-3 text-[11px] text-[#928a7f]">No reference photos were attached.</p>}</PanelCard></div></aside></div>}
+    {notice && <div className="mb-4 rounded-lg border border-[#ece6dd] bg-white px-4 py-3 text-[11px] text-[#8b8479]">{notice}</div>}
+    <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Custom request views">
+      <Button variant={view === "active" ? "primary" : "secondary"} onClick={() => { setSelected(null); setView("active"); }}>Active requests</Button>
+      <Button variant={view === "archive" ? "primary" : "secondary"} onClick={() => { setSelected(null); setView("archive"); }}>Archive</Button>
+    </div>
+    <div className="mb-4 grid gap-3 sm:grid-cols-3">
+      {[
+        { label: view === "archive" ? "Archived requests" : "Total requests", value: String(viewRequests.length) },
+        { label: view === "archive" ? "Statuses preserved" : "New to review", value: view === "archive" ? "Yes" : String(viewRequests.filter((request) => request.status === "new").length) },
+        { label: "With reference photos", value: String(viewRequests.filter((request) => request.images.length > 0).length) },
+      ].map((item) => <PanelCard key={item.label} className="p-4"><p className="text-[10px] text-[#8f887e]">{item.label}</p><p className="mt-2 text-[20px] font-semibold text-[#34312c]">{item.value}</p></PanelCard>)}
+    </div>
+    {statusError && <p role="alert" className="mb-4 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] text-[#8f493b]">{statusError}</p>}
+    {statusSuccess && <p role="status" className="mb-4 rounded-lg border border-[#dce8d8] bg-[#f2f7ef] p-3 text-[11px] text-[#587052]">{statusSuccess}</p>}
+    <PanelCard className="overflow-hidden">
+      <div className="flex flex-wrap items-center gap-2 border-b border-[#f0ece6] p-4">
+        <div className="w-full sm:max-w-[320px]"><SearchField value={query} onChange={setQuery} placeholder="Search name, email, or request?" /></div>
+        <select value={filter} onChange={(event) => setFilter(event.target.value)} className="h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] text-[#5a554d] outline-none sm:w-auto">
+          <option>All requests</option><option value="new">New</option><option value="reviewing">Reviewing</option><option value="quoted">Quoted</option><option value="completed">Completed</option><option value="declined">Declined</option><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="processing">Processing</option><option value="shipped">Shipped</option><option value="delivered">Delivered</option><option value="cancelled">Cancelled</option>
+        </select>
+        <span className="ml-auto text-[10px] text-[#9a9388]">{filtered.length} requests</span>
+      </div>
+      <div className="hidden overflow-x-auto sm:block">
+        <table className="w-full min-w-[930px] text-left">
+          <thead className="bg-white text-[9px] uppercase tracking-[.1em] text-[#948c80]"><tr>{["Request", "Customer", "Submitted", "References", "Status", "Actions"].map((label) => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead>
+          <tbody>{filtered.map((request) => <tr key={request.id} className="border-t border-[#f3f0ea] text-[11px] hover:bg-white">
+            <td className="px-4 py-4 font-semibold text-[#48443d]">CR-{String(request.request_number).replace(/^CR-/, "")}<p className="mt-1 max-w-[210px] truncate text-[9px] font-normal text-[#9c958a]">{request.description}</p></td>
+            <td className="px-4 py-4"><p className="font-medium text-[#48443d]">{request.full_name}</p><p className="mt-1 text-[9px] text-[#9c958a]">{request.phone}</p></td>
+            <td className="px-4 py-4 text-[#756f65]">{displayDate(request.created_at)}</td>
+            <td className="px-4 py-4 text-[#756f65]">{request.images.length ? request.images.length + (request.images.length === 1 ? " photo" : " photos") : "None"}</td>
+            <td className="px-4 py-4"><select aria-label={"Status for request " + request.request_number} value={request.status} disabled={source !== "live" || view === "archive" || savingStatusId === request.id} onChange={(event) => void changeRequestStatus(request, event.target.value)} className="h-9 max-w-full rounded-md border border-[#e9e4dc] bg-white px-2 text-[10px] text-[#48443d] disabled:opacity-60">{requestStatusOptions(request).map((status) => <option key={status} value={status}>{displayStatus(status)}</option>)}</select></td>
+            <td className="px-4 py-4">{requestActions(request)}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>
+      <div className="space-y-3 p-3 sm:hidden">
+        {filtered.map((request) => <article key={request.id} className="min-w-0 rounded-lg border border-[#eee8df] p-3">
+          <div className="flex min-w-0 items-start justify-between gap-3"><div className="min-w-0"><p className="text-[11px] font-semibold text-[#48443d]">CR-{String(request.request_number).replace(/^CR-/, "")}</p><p className="mt-1 break-words text-[12px] font-medium text-[#34312c]">{request.full_name}</p><p className="mt-1 break-all text-[10px] text-[#8c857b]">{request.phone}{request.email ? " ? " + request.email : ""}</p></div><span className="shrink-0 text-[9px] text-[#8c857b]">{request.images.length} photos</span></div>
+          <p className="mt-2 text-[10px] text-[#8c857b]">{displayDate(request.created_at)}</p>
+          <label className="mt-3 block text-[10px] font-medium text-[#716a60]">Request status<select aria-label={"Status for request " + request.request_number} value={request.status} disabled={source !== "live" || view === "archive" || savingStatusId === request.id} onChange={(event) => void changeRequestStatus(request, event.target.value)} className="mt-1.5 h-11 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[12px] text-[#48443d] disabled:opacity-60">{requestStatusOptions(request).map((status) => <option key={status} value={status}>{displayStatus(status)}</option>)}</select></label>
+          <div className="mt-2">{requestActions(request)}</div>
+        </article>)}
+      </div>
+      {!filtered.length && <div className="p-10 text-center text-xs text-[#928a7f]">{source === "loading" ? "Loading customer requests…" : source === "unavailable" ? "Requests could not be loaded." : "No requests match your search."}</div>}
+    </PanelCard>
+    {selected && <div role="presentation" className="fixed inset-0 z-50 flex justify-end bg-[#28241f]/35 backdrop-blur-[1px]" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null); }}>
+      <aside role="dialog" aria-modal="true" aria-label={"Request from " + selected.full_name} className="h-full w-full max-w-2xl overflow-y-auto bg-white shadow-2xl">
+        <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-[#ece6dd] bg-white/95 px-4 py-3 backdrop-blur sm:px-7 sm:py-4">
+          <div><p className="text-[9px] font-medium uppercase tracking-[.15em] text-[#a77b47]">Custom request</p><h2 className="mt-1 text-[18px] font-semibold text-[#302d27]">CR-{String(selected.request_number).replace(/^CR-/, "")}</h2></div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select aria-label="Custom request status" value={selected.status} disabled={source !== "live" || view === "archive" || savingStatusId === selected.id} onChange={(event) => void changeRequestStatus(selected, event.target.value)} className="h-10 max-w-[185px] rounded-lg border border-[#e9e4dc] bg-white px-2 text-[11px] text-[#48443d] disabled:opacity-60">{requestStatusOptions(selected).map((status) => <option key={status} value={status}>{displayStatus(status)}</option>)}</select>
+            {view === "active"
+              ? <Button variant="secondary" disabled={source !== "live" || savingStatusId === selected.id} onClick={() => void setRequestArchiveState(selected, "archive")}>Archive</Button>
+              : <><Button variant="secondary" disabled={source !== "live" || savingStatusId === selected.id} onClick={() => void setRequestArchiveState(selected, "restore")}>Restore</Button><Button variant="quiet" className="text-[#9d5548]" disabled={source !== "live" || savingStatusId === selected.id} onClick={() => void permanentlyDeleteRequest(selected)}>Delete permanently</Button></>}
+            <button aria-label="Close request" onClick={() => setSelected(null)} className="rounded-md p-2 text-[#827b70] hover:bg-white"><X size={16} /></button>
+          </div>
+        </div>
+        <div className="space-y-4 p-3 sm:space-y-5 sm:p-7">
+          <PanelCard className="p-4 sm:p-5"><h3 className="text-[12px] font-semibold text-[#34312c]">Customer information</h3><div className="mt-4 grid gap-x-5 gap-y-4 sm:grid-cols-2">{[{ label: "Full name", value: selected.full_name }, { label: "Phone number", value: selected.phone }, { label: "Email address", value: selected.email || "Not provided" }, { label: "City / area", value: selected.city_area }].map((field) => <div key={field.label}><p className="text-[9px] uppercase tracking-[.1em] text-[#a09a90]">{field.label}</p><p className="mt-1 break-words text-[11px] font-medium text-[#48443d]">{field.value}</p></div>)}<div className="sm:col-span-2"><p className="text-[9px] uppercase tracking-[.1em] text-[#a09a90]">Delivery address</p><p className="mt-1 text-[11px] font-medium text-[#48443d]">{selected.delivery_address}</p></div></div></PanelCard>
+          {selected.quoted_price_bdt != null && <PanelCard className="p-4"><p className="text-[10px] uppercase tracking-[.1em] text-[#a09a90]">Current quote</p><p className="mt-1 text-[16px] font-semibold text-[#34312c]">{money(Number(selected.quoted_price_bdt))}</p></PanelCard>}
+          {selected.custom_request_status_events?.length ? <PanelCard className="p-4"><h3 className="text-[12px] font-semibold text-[#34312c]">Status history</h3><ol className="mt-3 space-y-2">{[...selected.custom_request_status_events].sort((a, b) => a.created_at.localeCompare(b.created_at)).map((event) => <li key={event.id} className="border-l border-[#DBD5C7] pl-3 text-[10px]"><p className="font-medium capitalize text-[#48443d]">{event.to_status} <span className="font-normal text-[#928a7e]">? {new Date(event.created_at).toLocaleString("en-BD")} by {event.actor_email}</span></p>{event.note && <p className="mt-1 text-[#777168]">{event.note}</p>}</li>)}</ol></PanelCard> : null}
+          <PanelCard className="p-5"><div className="flex items-center justify-between"><h3 className="text-[12px] font-semibold text-[#34312c]">Request description</h3><span className="text-[9px] text-[#a09a90]">Submitted {displayDate(selected.created_at)}</span></div><p className="mt-3 whitespace-pre-wrap text-[12px] leading-6 text-[#625d55]">{selected.description}</p></PanelCard>
+          <PanelCard className="p-5"><div className="flex items-center justify-between"><h3 className="text-[12px] font-semibold text-[#34312c]">Reference photos</h3><span className="text-[9px] text-[#a09a90]">{selected.images.length} attached</span></div>{selected.images.length ? <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">{selected.images.map((image) => <a key={image.id} href={image.signed_url || "#"} target="_blank" rel="noreferrer" className="group overflow-hidden rounded-lg border border-[#ece6dd] bg-white"><div className="aspect-square overflow-hidden"><img src={image.signed_url || ""} alt={image.file_name} className="h-full w-full object-cover transition duration-300 group-hover:scale-105" /></div><p className="truncate px-2.5 py-2 text-[9px] text-[#777168]">{image.file_name}</p></a>)}</div> : <p className="mt-3 text-[11px] text-[#928a7f]">No reference photos were attached.</p>}</PanelCard>
+        </div>
+      </aside>
+    </div>}
   </>;
 }
 
@@ -853,30 +1108,46 @@ function RewardsPage() {
   </>;
 }
 
-type MediaAsset = { path: string; name: string; public_url: string; created_at: string | null; metadata: { mimetype?: string; size?: number } | null };
+type MediaAsset = { path: string; name: string; public_url: string; created_at: string | null; archived_at?: string | null; metadata: { mimetype?: string; size?: number } | null };
 
 function MediaPage() {
   const [media, setMedia] = useState<MediaAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [busyPath, setBusyPath] = useState("");
+  const [view, setView] = useState<"active" | "archive">("active");
   const [role, setRole] = useState<"hero" | "category" | "deal">("hero");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const loadMedia = () => apiFetch("/api/admin/media", { cache: "no-store" }).then(async (response) => {
+
+  const loadMedia = async () => {
+    const response = await apiFetch("/api/admin/media?view=" + view, { cache: "no-store" });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "Media could not be loaded.");
     setMedia(result.media ?? []);
-  });
+  };
+
   useEffect(() => {
     let active = true;
-    loadMedia().catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Media could not be loaded."); }).finally(() => { if (active) setLoading(false); });
+    setLoading(true);
+    setError("");
+    apiFetch("/api/admin/media?view=" + view, { cache: "no-store" })
+      .then(async (response) => {
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "Media could not be loaded.");
+        return result.media as MediaAsset[];
+      })
+      .then((result) => { if (active) setMedia(result ?? []); })
+      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Media could not be loaded."); })
+      .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [view]);
+
   const upload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp', 'image/avif'].includes(file.type) || file.size > 12 * 1024 * 1024) {
+    if (!["image/jpeg", "image/png", "image/webp", "image/avif"].includes(file.type) || file.size > 12 * 1024 * 1024) {
       setError("Choose a JPG, PNG, WebP, or AVIF image up to 12 MB.");
       return;
     }
@@ -889,16 +1160,81 @@ function MediaPage() {
       if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "The image could not be uploaded.");
       await loadMedia();
       setNotice("Image uploaded and optimized in Supabase Storage. Add its URL to homepage content to display it.");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "The image could not be uploaded."); }
-    finally { setUploading(false); }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The image could not be uploaded.");
+    } finally {
+      setUploading(false);
+    }
   };
+
+  const changeMediaArchiveState = async (asset: MediaAsset, action: "archive" | "restore") => {
+    setBusyPath(asset.path);
+    setError("");
+    setNotice("");
+    try {
+      const response = await apiFetch("/api/admin/media", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: asset.path, action }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "The media archive could not be updated.");
+      await loadMedia();
+      setNotice(action === "archive" ? "Media archived. Existing image URLs continue to work, and you can restore this file later." : "Media restored to the active library.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The media archive could not be updated.");
+    } finally {
+      setBusyPath("");
+    }
+  };
+
+  const permanentlyDeleteMedia = async (asset: MediaAsset) => {
+    if (!window.confirm("Permanently delete " + asset.name + "? If it is used on the storefront, that image will stop loading. This cannot be undone.")) return;
+    setBusyPath(asset.path);
+    setError("");
+    setNotice("");
+    try {
+      const response = await apiFetch("/api/admin/media", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: asset.path }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "The media file could not be permanently deleted.");
+      await loadMedia();
+      setNotice(asset.name + " was permanently deleted from Storage.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The media file could not be permanently deleted.");
+    } finally {
+      setBusyPath("");
+    }
+  };
+
   return <>
-    <SectionHeading title="Media library" description="Images stored in the public store-media bucket." action={<label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#252723] px-4 py-2.5 text-[11px] font-medium text-white hover:bg-black"><Plus size={15} /> {uploading ? "Uploading..." : "Add media"}<input type="file" accept="image/jpeg,image/png,image/webp,image/avif" onChange={upload} disabled={uploading} className="sr-only" /></label>} />
-    <div className="mb-4 flex flex-wrap items-center gap-2"><label className="text-[10px] text-[#716a60]">Upload for <select value={role} onChange={(event) => setRole(event.target.value as "hero" | "category" | "deal")} className="ml-2 h-9 rounded-lg border border-[#e9e4dc] bg-white px-2 text-[10px]"><option value="hero">Homepage hero</option><option value="category">Homepage category</option><option value="deal">Hot deal</option></select></label><p className="text-[10px] text-[#8f887e]">Uploads are optimized and stored. They appear on the site after being selected in Homepage content.</p></div>
+    <SectionHeading title="Media library" description="Archive hides files from this library while keeping existing image URLs intact." action={<label className={"inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#252723] px-4 py-2.5 text-[11px] font-medium text-white hover:bg-black " + (view === "archive" ? "pointer-events-none opacity-50" : "")}><Plus size={15} /> {uploading ? "Uploading..." : "Add media"}<input type="file" accept="image/jpeg,image/png,image/webp,image/avif" onChange={upload} disabled={uploading || view === "archive"} className="sr-only" /></label>} />
+    <div className="mb-4 flex flex-wrap items-center gap-3">
+      <div className="flex gap-2" role="group" aria-label="Media library views">
+        <Button variant={view === "active" ? "primary" : "secondary"} onClick={() => setView("active")}>Active media</Button>
+        <Button variant={view === "archive" ? "primary" : "secondary"} onClick={() => setView("archive")}>Archive</Button>
+      </div>
+      <label className="text-[10px] text-[#716a60]">Upload for <select value={role} onChange={(event) => setRole(event.target.value as "hero" | "category" | "deal")} disabled={view === "archive"} className="ml-2 h-9 rounded-lg border border-[#e9e4dc] bg-white px-2 text-[10px] disabled:opacity-50"><option value="hero">Homepage hero</option><option value="category">Homepage category</option><option value="deal">Hot deal</option></select></label>
+      <p className="text-[10px] text-[#8f887e]">{view === "archive" ? "Restore files to use them in the library again. Delete permanently only when you are sure." : "Uploads are optimized and stored. Archive keeps current image links working."}</p>
+    </div>
     {error && <p role="alert" className="mb-4 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] text-[#8f493b]">{error}</p>}
     {notice && <p role="status" className="mb-4 rounded-lg border border-[#d7e4d2] bg-[#f2f6ef] p-3 text-[11px] text-[#587052]">{notice}</p>}
-    {loading ? <p role="status" className="p-10 text-center text-xs text-[#928a7f]">Loading media...</p> : <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{media.map((asset) => <PanelCard key={asset.path} className="group overflow-hidden"><div className="relative aspect-square overflow-hidden bg-white"><img src={asset.public_url} alt={asset.name} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" /></div><div className="p-3"><p className="truncate text-[10px] font-semibold text-[#4a463f]">{asset.name}</p><p className="mt-1 truncate text-[9px] text-[#9c958a]">{asset.path}</p></div></PanelCard>)}</div>}
-    {!loading && !media.length && !error && <PanelCard className="p-10 text-center text-xs text-[#928a7f]">No files in the store media bucket yet.</PanelCard>}
+    {loading ? <p role="status" className="p-10 text-center text-xs text-[#928a7f]">Loading media...</p> : <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+      {media.map((asset) => <PanelCard key={asset.path} className="group overflow-hidden">
+        <div className="relative aspect-square overflow-hidden bg-white"><img src={asset.public_url} alt={asset.name} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" /></div>
+        <div className="p-3"><p className="truncate text-[10px] font-semibold text-[#4a463f]">{asset.name}</p><p className="mt-1 truncate text-[9px] text-[#9c958a]">{asset.path}</p>{asset.archived_at && <p className="mt-1 text-[9px] text-[#8f887e]">Archived {new Date(asset.archived_at).toLocaleDateString("en-BD")}</p>}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {view === "active"
+              ? <Button variant="secondary" className="min-h-8 px-3 text-[10px]" disabled={busyPath === asset.path} onClick={() => void changeMediaArchiveState(asset, "archive")}>{busyPath === asset.path ? "Saving..." : "Archive"}</Button>
+              : <><Button variant="secondary" className="min-h-8 px-3 text-[10px]" disabled={busyPath === asset.path} onClick={() => void changeMediaArchiveState(asset, "restore")}>{busyPath === asset.path ? "Saving..." : "Restore"}</Button><Button variant="quiet" className="min-h-8 px-2 text-[10px] text-[#9d5548]" disabled={busyPath === asset.path} onClick={() => void permanentlyDeleteMedia(asset)}>Delete</Button></>}
+          </div>
+        </div>
+      </PanelCard>)}
+    </div>}
+    {!loading && !media.length && !error && <PanelCard className="p-10 text-center text-xs text-[#928a7f]">{view === "archive" ? "No media has been archived." : "No files in the store media bucket yet."}</PanelCard>}
   </>;
 }
 
@@ -946,7 +1282,23 @@ function HomepageContentPage() {
     Promise.all([apiFetch("/api/homepage-content", { cache: "no-store" }).then((response) => response.json()), apiFetch("/api/catalog", { cache: "no-store" }).then((response) => response.json())])
       .then(([homepage, catalog]) => {
         if (!active) return;
-        if (homepage.content?.heroSlides && homepage.content?.categories && homepage.content?.hotDeals) setContent({ ...DEFAULT_HOMEPAGE_CONTENT, ...homepage.content, newArrivals: { ...DEFAULT_HOMEPAGE_CONTENT.newArrivals, ...(Array.isArray(homepage.content.newArrivals) ? { productIds: homepage.content.newArrivals } : homepage.content.newArrivals ?? {}) } });
+        if (homepage.content?.heroSlides && homepage.content?.categories && homepage.content?.hotDeals) {
+          const loadedContent: HomepageContent = {
+            ...DEFAULT_HOMEPAGE_CONTENT,
+            ...homepage.content,
+            newArrivals: {
+              ...DEFAULT_HOMEPAGE_CONTENT.newArrivals,
+              ...(Array.isArray(homepage.content.newArrivals) ? { productIds: homepage.content.newArrivals } : homepage.content.newArrivals ?? {}),
+            },
+          };
+          if (catalog.source === "supabase" && Array.isArray(catalog.products)) {
+            const activeProductIds = new Set(catalog.products.map((product: { id: string }) => product.id));
+            loadedContent.newArrivals.productIds = loadedContent.newArrivals.productIds.filter((id) => activeProductIds.has(id));
+            loadedContent.hotDeals = loadedContent.hotDeals.filter((deal) => activeProductIds.has(deal.productId));
+            if (!loadedContent.hotDeals.length) loadedContent.hotDealsActive = false;
+          }
+          setContent(loadedContent);
+        }
         if (Array.isArray(catalog.products)) setProductOptions(catalog.products.map((product: any) => ({
           id: product.id,
           name: product.name,
@@ -982,7 +1334,7 @@ function HomepageContentPage() {
     setContent((current) => ({ ...current, hotDealsActive: true, hotDeals: [...current.hotDeals, {
       productId: product.id, name: product.name, category: product.category,
       price: product.currentPrice, was: product.originalPrice || product.currentPrice,
-      image: product.image || DEFAULT_HOMEPAGE_CONTENT.hotDeals[0].image,
+      image: product.image,
       alt: product.name, active: false,
     }] }));
   };
@@ -1017,8 +1369,8 @@ function HomepageContentPage() {
       <div className="space-y-4">
         <div><SectionHeading title="Hero slides" description="Manage homepage banners and the collection opened by each button." action={<Button variant="secondary" disabled={content.heroSlides.length >= 10} onClick={() => setContent((current) => ({ ...current, heroSlides: [...current.heroSlides, { ...DEFAULT_HOMEPAGE_CONTENT.heroSlides[0], active: false }] }))}><Plus size={14} /> Add slide</Button>} />{content.heroSlides.map((slide, index) => <PanelCard key={`hero-${index}`} className="mb-3 p-4 sm:p-5"><div className="mb-4 flex items-center justify-between"><h3 className="text-[12px] font-semibold text-[#38352f]">Slide {index + 1}</h3><label className="flex items-center gap-2 text-[10px] text-[#716a60]"><input type="checkbox" checked={slide.active} disabled={slide.active && content.heroSlides.filter((item) => item.active).length <= 1} onChange={(event) => updateHero(index, "active", event.target.checked)} /> Show on site</label><Button variant="quiet" className="min-h-8 px-3 text-[10px] text-[#9d5548]" disabled={content.heroSlides.length <= 1} onClick={() => setContent((current) => ({ ...current, heroSlides: current.heroSlides.filter((_, row) => row !== index) }))}><Trash2 size={12} /> Remove slide</Button></div><div className="grid gap-4 lg:grid-cols-[1fr_1fr]"><HomepageImageField label="Hero image URL or upload" value={slide.image} onChange={(value) => updateHero(index, "image", value)} /><div className="space-y-3"><label className="block text-[10px] font-medium text-[#716a60]">Eyebrow<input value={slide.eyebrow} onChange={(event) => updateHero(index, "eyebrow", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Headline<textarea rows={2} value={slide.headline} onChange={(event) => updateHero(index, "headline", event.target.value)} className={textAreaClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Supporting text<textarea rows={2} value={slide.subtext} onChange={(event) => updateHero(index, "subtext", event.target.value)} className={textAreaClass} /></label><div className="grid gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60]">Button label<input value={slide.ctaLabel} onChange={(event) => updateHero(index, "ctaLabel", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Collection to open<select value={slide.categorySlug} onChange={(event) => updateHero(index, "categorySlug", event.target.value)} className={inputClass}>{!collectionOptions.some((option) => option.slug === slide.categorySlug) && <option value={slide.categorySlug}>Unavailable: {slide.categorySlug}</option>}{collectionOptions.map((option) => <option key={option.slug} value={option.slug}>{option.label}</option>)}</select></label></div><label className="block text-[10px] font-medium text-[#716a60]">Image alt text<input value={slide.alt} onChange={(event) => updateHero(index, "alt", event.target.value)} className={inputClass} /></label></div></div></PanelCard>)}</div>
         <div><SectionHeading title="Top category cards" description="These cards link customers to the collections you choose." action={<Button variant="secondary" disabled={content.categories.length >= 12} onClick={() => setContent((current) => ({ ...current, categories: [...current.categories, { ...DEFAULT_HOMEPAGE_CONTENT.categories[0], active: false }] }))}><Plus size={14} /> Add card</Button>} />{content.categories.map((category, index) => <PanelCard key={`category-${index}`} className="mb-3 p-4 sm:p-5"><div className="mb-4 flex justify-end"><Button variant="quiet" className="min-h-8 px-3 text-[10px] text-[#9d5548]" onClick={() => setContent((current) => ({ ...current, categories: current.categories.filter((_, row) => row !== index) }))}><Trash2 size={12} /> Remove card</Button></div><div className="grid gap-4 lg:grid-cols-[1fr_1fr]"><HomepageImageField label={`${category.name} image URL or upload`} value={category.image} onChange={(value) => updateCategory(index, "image", value)} /><div className="grid content-start gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60]">Card name<input value={category.name} onChange={(event) => updateCategory(index, "name", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Collection to open<select value={category.slug} onChange={(event) => updateCategory(index, "slug", event.target.value)} className={inputClass}>{!collectionOptions.some((option) => option.slug === category.slug) && <option value={category.slug}>Unavailable: {category.slug}</option>}{collectionOptions.map((option) => <option key={option.slug} value={option.slug}>{option.label}</option>)}</select></label><label className="block text-[10px] font-medium text-[#716a60]">Image alt text<input value={category.alt} onChange={(event) => updateCategory(index, "alt", event.target.value)} className={inputClass} /></label><label className="flex items-center gap-2 pt-5 text-[10px] text-[#716a60]"><input type="checkbox" checked={category.active} onChange={(event) => updateCategory(index, "active", event.target.checked)} /> Show category</label></div></div></PanelCard>)}</div>
-        <div><SectionHeading title="New arrivals" description="Feature active products on the homepage. Add products and upload their images in Products, then select them here." action={<div className="flex gap-2"><Button variant="quiet" disabled={!content.newArrivals.productIds.length} onClick={() => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, productIds: [] } }))}>Clear selection</Button><Button variant="secondary" onClick={() => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, active: true, productIds: [...DEFAULT_HOMEPAGE_CONTENT.newArrivals.productIds] } }))}>Restore sample selection</Button></div>} /><PanelCard className="mb-3 p-4"><div className="grid gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60]">Section title<input maxLength={80} value={content.newArrivals.title} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, title: event.target.value } }))} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Eyebrow text<input maxLength={80} value={content.newArrivals.eyebrow} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, eyebrow: event.target.value } }))} className={inputClass} /></label><label className="flex items-center gap-2 text-[10px] text-[#716a60] sm:col-span-2"><input type="checkbox" checked={content.newArrivals.active} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, active: event.target.checked } }))} /> Show New Arrivals on the homepage and in collection filters</label></div></PanelCard><PanelCard className="divide-y divide-[#f0ece6]">{productOptions.map((product) => <label key={product.id} className="flex cursor-pointer items-center gap-3 px-4 py-3 text-[11px] text-[#34312c]"><input type="checkbox" checked={content.newArrivals.productIds.includes(product.id)} disabled={!content.newArrivals.productIds.includes(product.id) && content.newArrivals.productIds.length >= 30} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, productIds: event.target.checked ? [...current.newArrivals.productIds, product.id] : current.newArrivals.productIds.filter((id) => id !== product.id) } }))} /><span>{product.name}</span>{content.newArrivals.productIds.includes(product.id) && <span className="ml-auto text-[9px] text-[#737373]">Selected for collection</span>}</label>)}{productOptions.length === 0 && <p className="p-4 text-[11px] text-[#737373]">No products are available to feature.</p>}</PanelCard></div>
-        <div><SectionHeading title="Hot deal cards" description="Choose active products, upload deal imagery, and manage what appears on the homepage." action={<div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={!productOptions.length || content.hotDeals.length >= 30} onClick={addDeal}><Plus size={14} /> Add deal</Button><Button variant="secondary" onClick={() => setContent((current) => ({ ...current, hotDealsActive: true, hotDeals: [...DEFAULT_HOMEPAGE_CONTENT.hotDeals] }))}>Restore sample deals</Button></div>} /><PanelCard className="mb-3 p-4"><label className="flex items-center gap-2 text-[10px] text-[#716a60]"><input type="checkbox" checked={content.hotDealsActive} onChange={(event) => setContent((current) => ({ ...current, hotDealsActive: event.target.checked }))} /> Show Hot Deals section on site</label></PanelCard>{content.hotDeals.map((deal, index) => <PanelCard key={`deal-${index}`} className="mb-3 p-4 sm:p-5"><div className="mb-4 flex items-center justify-between"><h3 className="text-[12px] font-semibold text-[#38352f]">Deal {index + 1}</h3><label className="flex items-center gap-2 text-[10px] text-[#716a60]"><input type="checkbox" checked={deal.active} onChange={(event) => updateDeal(index, "active", event.target.checked)} /> Show on site</label><Button variant="quiet" className="min-h-8 px-3 text-[10px] text-[#9d5548]" onClick={() => setContent((current) => ({ ...current, hotDeals: current.hotDeals.filter((_, row) => row !== index) }))}><Trash2 size={12} /> Remove deal</Button></div><div className="grid gap-4 lg:grid-cols-[1fr_1fr]"><HomepageImageField label={`${deal.name} image URL or upload`} value={deal.image} onChange={(value) => updateDeal(index, "image", value)} /><div className="grid content-start gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60] sm:col-span-2">Linked product<select value={deal.productId} onChange={(event) => updateDeal(index, "productId", event.target.value)} className={inputClass}>{productOptions.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label><label className="block text-[10px] font-medium text-[#716a60]">Card title<input value={deal.name} onChange={(event) => updateDeal(index, "name", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Category label<input value={deal.category} onChange={(event) => updateDeal(index, "category", event.target.value)} className={inputClass} /></label><div className="text-[10px] font-medium text-[#716a60]">Current price from product<p className="mt-1.5 flex h-10 items-center rounded-lg border border-[#e9e4dc] bg-[#f7f7f7] px-3 text-[11px] text-[#454139]">BDT {(productOptions.find((product) => product.id === deal.productId)?.currentPrice ?? deal.price) / 100}</p></div><label className="block text-[10px] font-medium text-[#716a60]">Reference price (BDT)<input type="number" value={deal.was / 100} onChange={(event) => updateDeal(index, "was", Number(event.target.value) * 100)} className={inputClass} /><span className="mt-1 block text-[9px] font-normal text-[#928a7e]">Checkout price follows the linked product. Set its selling and original prices in Products.</span></label><label className="block text-[10px] font-medium text-[#716a60] sm:col-span-2">Image alt text<input value={deal.alt} onChange={(event) => updateDeal(index, "alt", event.target.value)} className={inputClass} /></label></div></div></PanelCard>)}</div>
+        <div><SectionHeading title="New arrivals" description="Feature active products on the homepage. Add products and upload their images in Products, then select them here." action={<div className="flex gap-2"><Button variant="quiet" disabled={!content.newArrivals.productIds.length} onClick={() => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, productIds: [] } }))}>Clear selection</Button></div>} /><PanelCard className="mb-3 p-4"><div className="grid gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60]">Section title<input maxLength={80} value={content.newArrivals.title} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, title: event.target.value } }))} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Eyebrow text<input maxLength={80} value={content.newArrivals.eyebrow} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, eyebrow: event.target.value } }))} className={inputClass} /></label><label className="flex items-center gap-2 text-[10px] text-[#716a60] sm:col-span-2"><input type="checkbox" checked={content.newArrivals.active} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, active: event.target.checked } }))} /> Show New Arrivals on the homepage and in collection filters</label></div></PanelCard><PanelCard className="divide-y divide-[#f0ece6]">{productOptions.map((product) => <label key={product.id} className="flex cursor-pointer items-center gap-3 px-4 py-3 text-[11px] text-[#34312c]"><input type="checkbox" checked={content.newArrivals.productIds.includes(product.id)} disabled={!content.newArrivals.productIds.includes(product.id) && content.newArrivals.productIds.length >= 30} onChange={(event) => setContent((current) => ({ ...current, newArrivals: { ...current.newArrivals, productIds: event.target.checked ? [...current.newArrivals.productIds, product.id] : current.newArrivals.productIds.filter((id) => id !== product.id) } }))} /><span>{product.name}</span>{content.newArrivals.productIds.includes(product.id) && <span className="ml-auto text-[9px] text-[#737373]">Selected for collection</span>}</label>)}{productOptions.length === 0 && <p className="p-4 text-[11px] text-[#737373]">No products are available to feature.</p>}</PanelCard></div>
+        <div><SectionHeading title="Hot deal cards" description="Choose active products, upload deal imagery, and manage what appears on the homepage." action={<div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={!productOptions.length || content.hotDeals.length >= 30} onClick={addDeal}><Plus size={14} /> Add deal</Button></div>} /><PanelCard className="mb-3 p-4"><label className="flex items-center gap-2 text-[10px] text-[#716a60]"><input type="checkbox" checked={content.hotDealsActive} onChange={(event) => setContent((current) => ({ ...current, hotDealsActive: event.target.checked }))} /> Show Hot Deals section on site</label></PanelCard>{content.hotDeals.map((deal, index) => <PanelCard key={`deal-${index}`} className="mb-3 p-4 sm:p-5"><div className="mb-4 flex items-center justify-between"><h3 className="text-[12px] font-semibold text-[#38352f]">Deal {index + 1}</h3><label className="flex items-center gap-2 text-[10px] text-[#716a60]"><input type="checkbox" checked={deal.active} onChange={(event) => updateDeal(index, "active", event.target.checked)} /> Show on site</label><Button variant="quiet" className="min-h-8 px-3 text-[10px] text-[#9d5548]" onClick={() => setContent((current) => ({ ...current, hotDeals: current.hotDeals.filter((_, row) => row !== index) }))}><Trash2 size={12} /> Remove deal</Button></div><div className="grid gap-4 lg:grid-cols-[1fr_1fr]"><HomepageImageField label={`${deal.name} image URL or upload`} value={deal.image} onChange={(value) => updateDeal(index, "image", value)} /><div className="grid content-start gap-3 sm:grid-cols-2"><label className="block text-[10px] font-medium text-[#716a60] sm:col-span-2">Linked product<select value={deal.productId} onChange={(event) => updateDeal(index, "productId", event.target.value)} className={inputClass}>{productOptions.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label><label className="block text-[10px] font-medium text-[#716a60]">Card title<input value={deal.name} onChange={(event) => updateDeal(index, "name", event.target.value)} className={inputClass} /></label><label className="block text-[10px] font-medium text-[#716a60]">Category label<input value={deal.category} onChange={(event) => updateDeal(index, "category", event.target.value)} className={inputClass} /></label><div className="text-[10px] font-medium text-[#716a60]">Current price from product<p className="mt-1.5 flex h-10 items-center rounded-lg border border-[#e9e4dc] bg-[#f7f7f7] px-3 text-[11px] text-[#454139]">BDT {(productOptions.find((product) => product.id === deal.productId)?.currentPrice ?? deal.price) / 100}</p></div><label className="block text-[10px] font-medium text-[#716a60]">Reference price (BDT)<input type="number" value={deal.was / 100} onChange={(event) => updateDeal(index, "was", Number(event.target.value) * 100)} className={inputClass} /><span className="mt-1 block text-[9px] font-normal text-[#928a7e]">Checkout price follows the linked product. Set its selling and original prices in Products.</span></label><label className="block text-[10px] font-medium text-[#716a60] sm:col-span-2">Image alt text<input value={deal.alt} onChange={(event) => updateDeal(index, "alt", event.target.value)} className={inputClass} /></label></div></div></PanelCard>)}</div>
       </div>
       <div className="mt-5 flex justify-end"><Button disabled={saving} onClick={() => void save()}><Check size={14} /> {saving ? "Saving…" : "Save homepage content"}</Button></div>
     </>}
