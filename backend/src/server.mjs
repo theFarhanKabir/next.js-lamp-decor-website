@@ -959,6 +959,9 @@ async function handleOrders(request, response, method, url) {
     let query = auth.service.from("orders")
       .select("*,order_items(id,product_name,product_sku,quantity,unit_price_bdt,line_total_bdt,selected_options),order_status_events(id,from_status,to_status,actor_email,note,created_at)")
       .order("placed_at", { ascending: false }).limit(100);
+    query = url.searchParams.get("view") === "archive"
+      ? query.not("archived_at", "is", null)
+      : query.is("archived_at", null);
     const status = url.searchParams.get("status");
     if (status && orderStatuses.has(status)) query = query.eq("status", status);
     const { data, error } = await query;
@@ -972,9 +975,34 @@ async function handleOrders(request, response, method, url) {
     send(response, 200, { orders: (data ?? []).map((order) => ({ ...order, payment_transaction: paymentByOrder.get(order.id) ?? null })) });
     return;
   }
+  if (method === "DELETE") {
+    const body = await readJson(request);
+    if (typeof body.id !== "string" || !/^[0-9a-f-]{36}$/i.test(body.id)) throw new HttpError(400, "Choose a valid order.");
+    const { error } = await auth.service.rpc("admin_delete_archived_order", { p_order_id: body.id });
+    if (error?.code === "P0002") throw new HttpError(404, error.message);
+    if (error?.code === "22023") throw new HttpError(409, error.message);
+    assertNoDbError(error, "The order could not be permanently deleted. Apply the latest Supabase migration and try again.");
+    send(response, 200, { ok: true });
+    return;
+  }
   if (method === "PATCH") {
     const body = await readJson(request);
     if (typeof body.id !== "string" || !/^[0-9a-f-]{36}$/i.test(body.id)) throw new HttpError(400, "Choose a valid order.");
+    if (body.action === "archive" || body.action === "restore") {
+      const archivedAt = body.action === "archive" ? new Date().toISOString() : null;
+      let update = auth.service.from("orders").update({ archived_at: archivedAt }).eq("id", body.id);
+      update = archivedAt ? update.is("archived_at", null) : update.not("archived_at", "is", null);
+      const { data, error } = await update.select("id,archived_at").maybeSingle();
+      assertNoDbError(error, "The order archive could not be updated. Apply the latest Supabase migration and try again.");
+      if (!data) throw new HttpError(409, body.action === "archive" ? "This order is already archived or no longer exists." : "This order is not archived or no longer exists.");
+      send(response, 200, { ok: true, order: data });
+      return;
+    }
+    const { data: currentOrder, error: currentOrderError } = await auth.service.from("orders")
+      .select("archived_at").eq("id", body.id).maybeSingle();
+    assertNoDbError(currentOrderError, "The order could not be loaded.");
+    if (!currentOrder) throw new HttpError(404, "Order not found.");
+    if (currentOrder.archived_at) throw new HttpError(409, "Restore the order before changing its status or recording a refund.");
     const note = body.admin_note == null ? null : text(body.admin_note, "Admin note", { max: 4000, optional: true });
     if (body.action === "record_refund") {
       const reference = text(body.reference, "Refund reference", { min: 1, max: 120 });
@@ -1230,9 +1258,13 @@ async function handleCustomerCustomRequests(request, response) {
 async function handleCustomRequests(request, response, method, url) {
   if (method === "GET") {
     const auth = await admin(request);
-    const { data, error } = await auth.service.from("custom_requests")
-      .select("id,request_number,full_name,phone,email,city_area,delivery_address,description,status,admin_note,quoted_price_bdt,created_at,custom_request_status_events(id,from_status,to_status,actor_email,note,created_at),custom_request_images(id,file_name,storage_path,sort_order)")
+    let query = auth.service.from("custom_requests")
+      .select("id,request_number,full_name,phone,email,city_area,delivery_address,description,status,admin_note,quoted_price_bdt,created_at,archived_at,custom_request_status_events(id,from_status,to_status,actor_email,note,created_at),custom_request_images(id,file_name,storage_path,sort_order)")
       .order("created_at", { ascending: false });
+    query = url.searchParams.get("view") === "archive"
+      ? query.not("archived_at", "is", null)
+      : query.is("archived_at", null);
+    const { data, error } = await query;
     assertNoDbError(error, "Could not load custom product requests.");
     const rows = await Promise.all((data ?? []).map(async (item) => {
       const images = await Promise.all([...(item.custom_request_images ?? [])].sort((a, b) => a.sort_order - b.sort_order).map(async (image) => {
@@ -1247,6 +1279,22 @@ async function handleCustomRequests(request, response, method, url) {
   if (method === "PATCH") {
     const auth = await admin(request);
     const body = await readJson(request);
+    if (typeof body.id !== "string" || !/^[0-9a-f-]{36}$/i.test(body.id)) throw new HttpError(400, "Choose a valid custom request.");
+    if (body.action === "archive" || body.action === "restore") {
+      const archivedAt = body.action === "archive" ? new Date().toISOString() : null;
+      let update = auth.service.from("custom_requests").update({ archived_at: archivedAt }).eq("id", body.id);
+      update = archivedAt ? update.is("archived_at", null) : update.not("archived_at", "is", null);
+      const { data, error } = await update.select("id,archived_at").maybeSingle();
+      assertNoDbError(error, "The request archive could not be updated. Apply the latest Supabase migration and try again.");
+      if (!data) throw new HttpError(409, body.action === "archive" ? "This request is already archived or no longer exists." : "This request is not archived or no longer exists.");
+      send(response, 200, { ok: true, request: data });
+      return;
+    }
+    const { data: currentRequest, error: currentRequestError } = await auth.service.from("custom_requests")
+      .select("archived_at").eq("id", body.id).maybeSingle();
+    assertNoDbError(currentRequestError, "The custom request could not be loaded.");
+    if (!currentRequest) throw new HttpError(404, "Custom request not found.");
+    if (currentRequest.archived_at) throw new HttpError(409, "Restore the request before changing its status.");
     const statuses = new Set(["new", "reviewing", "quoted", "completed", "declined", "pending", "confirmed", "processing", "shipped", "delivered", "cancelled"]);
     if (typeof body.id !== "string" || !/^[0-9a-f-]{36}$/i.test(body.id) || !statuses.has(body.status)) {
       throw new HttpError(400, "Choose a valid custom request and status.");
@@ -1261,6 +1309,32 @@ async function handleCustomRequests(request, response, method, url) {
     if (["22023", "P0002"].includes(error?.code)) throw new HttpError(error.code === "P0002" ? 404 : 409, error.message);
     assertNoDbError(error, "The custom request status could not be updated. Apply the latest Supabase migration and try again.");
     send(response, 200, { ok: true, request: data });
+    return;
+  }
+  if (method === "DELETE") {
+    const auth = await admin(request);
+    const body = await readJson(request);
+    if (typeof body.id !== "string" || !/^[0-9a-f-]{36}$/i.test(body.id)) throw new HttpError(400, "Choose a valid custom request.");
+    const { data: requestRow, error: requestError } = await auth.service.from("custom_requests")
+      .select("id,archived_at").eq("id", body.id).maybeSingle();
+    assertNoDbError(requestError, "The request could not be loaded.");
+    if (!requestRow) throw new HttpError(404, "Custom request not found.");
+    if (!requestRow.archived_at) throw new HttpError(409, "Archive the request before permanently deleting it.");
+    const { data: images, error: imageError } = await auth.service.from("custom_request_images")
+      .select("storage_path").eq("request_id", body.id);
+    assertNoDbError(imageError, "The request reference photos could not be loaded.");
+    const { data: deleted, error: deleteError } = await auth.service.from("custom_requests")
+      .delete().eq("id", body.id).not("archived_at", "is", null).select("id").maybeSingle();
+    assertNoDbError(deleteError, "The request could not be permanently deleted.");
+    if (!deleted) throw new HttpError(409, "The request was restored before it could be deleted.");
+    const storagePaths = (images ?? []).map((image) => image.storage_path).filter(Boolean);
+    const { error: storageError } = storagePaths.length
+      ? await auth.service.storage.from(config.customReferenceBucket).remove(storagePaths)
+      : { error: null };
+    send(response, 200, {
+      ok: true,
+      ...(storageError ? { warning: "The request was deleted, but some reference photos could not be removed from Storage." } : {}),
+    });
     return;
   }
   if (method !== "POST") throw new HttpError(405, "This method is not supported for custom requests.");
@@ -1542,14 +1616,63 @@ async function handleAdminSettings(request, response, method) {
   send(response, 200, { ok: true, settings });
 }
 
-async function handleAdminMedia(request, response, method) {
+async function handleAdminMedia(request, response, method, url) {
   if (method === "POST") return handleImageUpload(request, response);
   const auth = await admin(request);
+  const viewArchive = url.searchParams.get("view") === "archive";
+  const { data: archivedRows, error: archivedError } = await auth.service.from("admin_media_archive")
+    .select("object_path,archived_at").eq("bucket_id", config.storeMediaBucket);
+  assertNoDbError(archivedError, "Media archive could not be loaded. Apply the latest Supabase migration and try again.");
+  const archivedByPath = new Map((archivedRows ?? []).map((row) => [row.object_path, row.archived_at]));
+
+  if (method === "PATCH" || method === "DELETE") {
+    const body = await readJson(request);
+    const path = typeof body.path === "string" ? body.path.trim() : "";
+    const pathParts = path.split("/");
+    if (!path || path.length > 1024 || path.startsWith("/") || pathParts.some((part) => !part || part === "." || part === ".." || /[\u0000-\u001f]/.test(part))) {
+      throw new HttpError(400, "Choose a valid media file.");
+    }
+    if (method === "PATCH") {
+      if (body.action !== "archive" && body.action !== "restore") throw new HttpError(400, "Choose archive or restore.");
+      if (body.action === "archive") {
+        const pathParts = path.split("/");
+        const fileName = pathParts.pop() ?? "";
+        const prefix = pathParts.join("/");
+        const { data: files, error: listError } = await auth.service.storage.from(config.storeMediaBucket)
+          .list(prefix, { search: fileName, limit: 100 });
+        assertNoDbError(listError, "The media file could not be checked in Storage.");
+        if (!(files ?? []).some((file) => file.id != null && file.name === fileName)) throw new HttpError(404, "This media file no longer exists.");
+        const { error } = await auth.service.from("admin_media_archive").upsert({
+          bucket_id: config.storeMediaBucket,
+          object_path: path,
+          archived_by_user_id: auth.user.id,
+        }, { onConflict: "bucket_id,object_path" });
+        assertNoDbError(error, "The media file could not be archived. Apply the latest Supabase migration and try again.");
+      } else {
+        const { error } = await auth.service.from("admin_media_archive")
+          .delete().eq("bucket_id", config.storeMediaBucket).eq("object_path", path);
+        assertNoDbError(error, "The media file could not be restored.");
+      }
+      send(response, 200, { ok: true });
+      return;
+    }
+
+    if (!archivedByPath.has(path)) throw new HttpError(409, "Archive this media file before permanently deleting it.");
+    const { error: storageError } = await auth.service.storage.from(config.storeMediaBucket).remove([path]);
+    assertNoDbError(storageError, "The media file could not be removed from Storage.");
+    const { error: archiveDeleteError } = await auth.service.from("admin_media_archive")
+      .delete().eq("bucket_id", config.storeMediaBucket).eq("object_path", path);
+    assertNoDbError(archiveDeleteError, "The file was deleted, but its archive record could not be cleared.");
+    send(response, 200, { ok: true });
+    return;
+  }
+
   const media = [];
+  let visited = 0;
   const visit = async (prefix = "", depth = 0) => {
-    if (depth > 6 || media.length >= 500) return;
+    if (depth > 6 || media.length >= 500 || visited >= 5000) return;
     let offset = 0;
-    while (offset < 1000 && media.length < 500) {
+    while (offset < 1000 && media.length < 500 && visited < 5000) {
       const { data, error } = await auth.service.storage.from(config.storeMediaBucket)
         .list(prefix, { limit: 100, offset, sortBy: { column: "created_at", order: "desc" } });
       assertNoDbError(error, "Store images could not be listed.");
@@ -1558,8 +1681,11 @@ async function handleAdminMedia(request, response, method) {
         const path = prefix ? `${prefix}/${item.name}` : item.name;
         if (item.id == null) await visit(path, depth + 1);
         else {
+          visited += 1;
+          const archivedAt = archivedByPath.get(path) ?? null;
+          if (Boolean(archivedAt) !== viewArchive) continue;
           const image = auth.service.storage.from(config.storeMediaBucket).getPublicUrl(path).data.publicUrl;
-          media.push({ path, name: item.name, public_url: image, created_at: item.created_at ?? null, metadata: item.metadata ?? null });
+          media.push({ path, name: item.name, public_url: image, created_at: item.created_at ?? null, archived_at: archivedAt, metadata: item.metadata ?? null });
           if (media.length >= 500) break;
         }
       }
@@ -1779,7 +1905,7 @@ async function route(request, response) {
   if (url.pathname === "/api/admin/homepage-content" && ["GET", "PATCH"].includes(method)) return handleHomepage(response, method, request, true);
   if (url.pathname === "/api/admin/categories" && ["GET", "POST", "PATCH", "DELETE"].includes(method)) return handleCategories(request, response, method);
   if (url.pathname === "/api/admin/products" && ["GET", "POST", "PATCH", "DELETE"].includes(method)) return handleAdminProducts(request, response, method, url);
-  if (url.pathname === "/api/admin/media" && ["GET", "POST"].includes(method)) return handleAdminMedia(request, response, method);
+  if (url.pathname === "/api/admin/media" && ["GET", "POST", "PATCH", "DELETE"].includes(method)) return handleAdminMedia(request, response, method, url);
   if (method === "GET" && url.pathname === "/api/admin/overview") return handleAdminOverview(request, response);
   if (method === "GET" && url.pathname === "/api/admin/customers") return handleAdminCustomers(request, response);
   if (url.pathname === "/api/admin/coupons" && ["GET", "POST", "PATCH", "DELETE"].includes(method)) return handleAdminCoupons(request, response, method);
@@ -1797,11 +1923,11 @@ async function route(request, response) {
   if (method === "POST" && ["/api/payments/sslcommerz/success", "/api/payments/sslcommerz/fail", "/api/payments/sslcommerz/cancel"].includes(url.pathname)) return handleSslCommerzCallback(request, response);
   if (method === "POST" && url.pathname === "/api/payments/sslcommerz/ipn") return handleSslCommerzCallback(request, response, { ipn: true });
   if (method === "POST" && url.pathname === "/api/admin/orders/steadfast") return handleAdminSteadfast(request, response);
-  if (url.pathname === "/api/admin/orders" && ["GET", "PATCH"].includes(method)) return handleOrders(request, response, method, url);
+  if (url.pathname === "/api/admin/orders" && ["GET", "PATCH", "DELETE"].includes(method)) return handleOrders(request, response, method, url);
   if (method === "GET" && url.pathname === "/api/customer/orders") return handleCustomerOrders(request, response);
   if (method === "GET" && url.pathname === "/api/customer/custom-requests") return handleCustomerCustomRequests(request, response);
   if (method === "POST" && url.pathname === "/api/webhooks/steadfast") return handleSteadfastWebhook(request, response);
-  if (url.pathname === "/api/custom-requests" && ["GET", "POST", "PATCH"].includes(method)) return handleCustomRequests(request, response, method, url);
+  if (url.pathname === "/api/custom-requests" && ["GET", "POST", "PATCH", "DELETE"].includes(method)) return handleCustomRequests(request, response, method, url);
   throw new HttpError(404, "This API route was not found.");
 }
 

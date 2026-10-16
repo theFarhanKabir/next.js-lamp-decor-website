@@ -11,7 +11,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   const headers = new Headers(init.headers);
   const url = new URL(path, typeof window === "undefined" ? "http://localhost" : window.location.origin);
   const adminRequest = url.pathname.startsWith("/api/admin/")
-    || (url.pathname === "/api/custom-requests" && ["GET", "PATCH"].includes((init.method ?? "GET").toUpperCase()))
+    || (url.pathname === "/api/custom-requests" && ["GET", "PATCH", "DELETE"].includes((init.method ?? "GET").toUpperCase()))
     || (url.pathname === "/api/reviews" && (url.searchParams.get("admin") === "1" || (init.method ?? "GET").toUpperCase() === "PATCH"));
   const supabase = adminRequest ? createAdminClient() : createClient();
   if (supabase) {

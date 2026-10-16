@@ -20,12 +20,16 @@ async function adminService() {
   return { service, user };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const { service, response } = await adminService();
   if (response) return response;
-  const { data, error } = await service.from("orders")
+  let query = service.from("orders")
     .select("*,order_items(id,product_name,product_sku,quantity,unit_price_bdt,line_total_bdt,selected_options),order_status_events(id,from_status,to_status,actor_email,note,created_at)")
     .order("placed_at", { ascending: false }).limit(100);
+  query = new URL(request.url).searchParams.get("view") === "archive"
+    ? query.not("archived_at", "is", null)
+    : query.is("archived_at", null);
+  const { data, error } = await query;
   if (error) return NextResponse.json({ error: "Could not load orders. Apply the latest Supabase migration and try again." }, { status: 500 });
   const ids = (data ?? []).map((order) => order.id);
   const { data: payments, error: paymentError } = ids.length
@@ -43,6 +47,19 @@ export async function PATCH(request: Request) {
   try { body = await request.json(); } catch { return NextResponse.json({ error: "Invalid request body." }, { status: 400 }); }
   const id = typeof body.id === "string" ? body.id : "";
   if (!/^[0-9a-f-]{36}$/i.test(id)) return NextResponse.json({ error: "Choose a valid order." }, { status: 400 });
+  if (body.action === "archive" || body.action === "restore") {
+    const archivedAt = body.action === "archive" ? new Date().toISOString() : null;
+    let update = service.from("orders").update({ archived_at: archivedAt }).eq("id", id);
+    update = archivedAt ? update.is("archived_at", null) : update.not("archived_at", "is", null);
+    const { data, error } = await update.select("id,archived_at").maybeSingle();
+    if (error) return NextResponse.json({ error: "The order archive could not be updated. Apply the latest Supabase migration and try again." }, { status: 500 });
+    if (!data) return NextResponse.json({ error: "This order is already in that archive state or no longer exists." }, { status: 409 });
+    return NextResponse.json({ ok: true, order: data });
+  }
+  const { data: currentOrder, error: currentOrderError } = await service.from("orders").select("archived_at").eq("id", id).maybeSingle();
+  if (currentOrderError) return NextResponse.json({ error: "The order could not be loaded." }, { status: 500 });
+  if (!currentOrder) return NextResponse.json({ error: "Order not found." }, { status: 404 });
+  if (currentOrder.archived_at) return NextResponse.json({ error: "Restore the order before changing its status or recording a refund." }, { status: 409 });
   const note = typeof body.admin_note === "string" ? body.admin_note.trim().slice(0, 4000) || null : null;
   const refund = body.action === "record_refund";
   if (!refund && (typeof body.status !== "string" || !["pending", "confirmed", "processing", "shipped", "delivered", "cancelled", "refunded"].includes(body.status))) {
@@ -59,4 +76,18 @@ export async function PATCH(request: Request) {
   if (error?.code === "22023") return NextResponse.json({ error: error.message }, { status: 409 });
   if (error) return NextResponse.json({ error: "The order could not be updated. Apply the latest Supabase migration and try again." }, { status: 500 });
   return NextResponse.json({ ok: true, order: data });
+}
+
+export async function DELETE(request: Request) {
+  const { service, response } = await adminService();
+  if (response) return response;
+  let body: Record<string, unknown>;
+  try { body = await request.json(); } catch { return NextResponse.json({ error: "Invalid request body." }, { status: 400 }); }
+  const id = typeof body.id === "string" ? body.id : "";
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return NextResponse.json({ error: "Choose a valid order." }, { status: 400 });
+  const { error } = await service.rpc("admin_delete_archived_order", { p_order_id: id });
+  if (error?.code === "P0002") return NextResponse.json({ error: error.message }, { status: 404 });
+  if (error?.code === "22023") return NextResponse.json({ error: error.message }, { status: 409 });
+  if (error) return NextResponse.json({ error: "The order could not be permanently deleted. Apply the latest Supabase migration and try again." }, { status: 500 });
+  return NextResponse.json({ ok: true });
 }

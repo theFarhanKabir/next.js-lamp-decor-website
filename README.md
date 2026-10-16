@@ -30,7 +30,7 @@ The standalone API for catalogue, admin, checkout, orders, and media is in [`bac
 
 ## Customer accounts
 
-Email registration, sign-in, email confirmation, password reset, and persistent sessions use Supabase Auth.
+Customer registration and sign-in use a Bangladesh mobile number and password through Supabase Auth. To allow sign-up without SMS OTP while MiMSMS is not configured, enable new user sign-ups and turn off Phone confirmations in the Supabase Auth provider settings. Password recovery still uses SMS OTP and requires the MiMSMS Send SMS Auth Hook.
 
 1. Create a Supabase project and copy its Project URL and Publishable key from **Project Settings → API**.
 2. Copy root `.env.example` to root `.env.local` and set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
@@ -39,9 +39,9 @@ Email registration, sign-in, email confirmation, password reset, and persistent 
 
 The custom request form and admin inbox also require the Supabase migrations in `supabase/migrations/` and a server-only `SUPABASE_SECRET_KEY` in `.env.local` (the legacy `SUPABASE_SERVICE_ROLE_KEY` is also accepted). Never put a secret key in a `NEXT_PUBLIC_*` variable. See [the admin setup guide](docs/admin-panel-setup.md).
 
-The public publishable key is intended for browser use; never add a Supabase secret or service-role key to `NEXT_PUBLIC_*` variables. Supabase's default email sender is suitable for trying the flow; configure custom SMTP before relying on registration and password-reset emails in production.
+The public publishable key is intended for browser use; never add a Supabase secret or service-role key to `NEXT_PUBLIC_*` variables. Admin account email flows, if enabled, require a configured Supabase email sender before production.
 
-Phone sign-up and recovery send SMS through MiMSMS using a Supabase Send SMS Auth Hook. Configure the server-only MiMSMS and hook secrets in `.env.local`, then complete the provider, IP/domain whitelist, and HTTPS hook setup in [the backend guide](backend/README.md).
+When you are ready to enable phone verification and SMS password recovery, configure the server-only MiMSMS and hook secrets in `.env.local`, then complete the provider, IP/domain whitelist, and HTTPS hook setup in [the backend guide](backend/README.md).
 
 ## Routes
 
@@ -53,7 +53,7 @@ Phone sign-up and recovery send SMS through MiMSMS using a Supabase Send SMS Aut
 - `/wishlist` - saved products
 - `/checkout` - checkout
 - `/custom-request` - custom product request
-- `/admin` - store admin preview and custom request inbox
+- `/admin` - store admin dashboard and custom request inbox
 - `/login` and `/register` - customer sign-in and registration
 - `/account` - signed-in customer account
 - `/forgot-password` and `/reset-password` - password recovery

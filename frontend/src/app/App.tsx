@@ -11,7 +11,7 @@ import {
   ArrowRight, ArrowLeft, Check, Package, Truck, Shield, Award, Share2,
   SlidersHorizontal, RotateCcw, Filter, Sliders, CheckSquare, Square
 } from "lucide-react";
-import { PRODUCTS, type Product } from "./catalog";
+import type { Product } from "./catalog";
 import { DEFAULT_HOMEPAGE_CONTENT, type HomepageContent } from "./homepage-content";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ interface ToastItem {
 
 type Page = { name: string; params?: Record<string, string> };
 type StoreSubcategory = { name: string; slug: string; parentSlug: string; parentName: string };
-type CatalogSource = "loading" | "fallback" | "supabase";
+type CatalogSource = "loading" | "unconfigured" | "unavailable" | "supabase";
 
 interface AppCtx {
   products: Product[];
@@ -216,12 +216,12 @@ const HERO_SLIDES = [
 ];
 
 const CATEGORIES = [
-  { name: "Lamps", count: PRODUCTS.filter((p) => p.category === "Lighting").length, image: U("photo-1778880707611-d1f09e32b4e2", 600), slug: "lighting" },
-  { name: "Mirrors", count: PRODUCTS.filter((p) => p.category === "Mirrors").length, image: U("photo-1542485028-6e019f9c8a8e", 600), slug: "mirrors" },
-  { name: "Tables", count: PRODUCTS.filter((p) => p.subcategory.toLowerCase().includes("table")).length, image: U("photo-1784651859128-b04c1d4732f3", 600), slug: "tables" },
-  { name: "Shades", count: PRODUCTS.filter((p) => p.category === "Shades").length, image: U("photo-1774444052266-2e4b58d85c3b", 600), slug: "shades" },
-  { name: "New Arrivals", count: PRODUCTS.filter((p) => p.badge === "new").length, image: U("photo-1775667693473-91e07000bb1a", 600), slug: "new" },
-  { name: "Sale", count: PRODUCTS.filter((p) => p.salePrice).length, image: U("photo-1542485028-6e019f9c8a8e", 600), slug: "sale" },
+  { name: "Lamps", image: U("photo-1778880707611-d1f09e32b4e2", 600), slug: "lighting" },
+  { name: "Mirrors", image: U("photo-1542485028-6e019f9c8a8e", 600), slug: "mirrors" },
+  { name: "Tables", image: U("photo-1784651859128-b04c1d4732f3", 600), slug: "tables" },
+  { name: "Shades", image: U("photo-1774444052266-2e4b58d85c3b", 600), slug: "shades" },
+  { name: "New Arrivals", image: U("photo-1775667693473-91e07000bb1a", 600), slug: "new" },
+  { name: "Sale", image: U("photo-1542485028-6e019f9c8a8e", 600), slug: "sale" },
 ];
 
 const NAV_ITEMS: { label: string; slug: string; hasMega: boolean; page?: string }[] = [
@@ -424,7 +424,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [products, setProducts] = useState<Product[]>(PRODUCTS);
+  const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<StoreSubcategory[]>([]);
   const [catalogSource, setCatalogSource] = useState<CatalogSource>("loading");
   const [homepageContent, setHomepageContent] = useState<HomepageContent>(DEFAULT_HOMEPAGE_CONTENT);
@@ -440,10 +440,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const currentRequest = ++requestId;
       apiFetch("/api/catalog", { cache: "no-store" }).then((response) => response.json()).then((result) => {
         if (!active || currentRequest !== requestId) return;
-        if (Array.isArray(result.products)) setProducts(result.products);
-        if (Array.isArray(result.categories)) setCategories(result.categories);
-        setCatalogSource(result.source === "supabase" ? "supabase" : "fallback");
-      }).catch(() => { if (active && currentRequest === requestId) setCatalogSource("fallback"); });
+        setProducts(Array.isArray(result.products) ? result.products : []);
+        setCategories(Array.isArray(result.categories) ? result.categories : []);
+        setCatalogSource(result.source === "supabase" ? "supabase" : result.source === "unconfigured" ? "unconfigured" : "unavailable");
+      }).catch(() => {
+        if (active && currentRequest === requestId) {
+          setProducts([]);
+          setCategories([]);
+          setCatalogSource("unavailable");
+        }
+      });
     };
     loadCatalog();
     window.addEventListener("storefront-data-updated", loadCatalog);
@@ -455,6 +461,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let active = true;
     hydratedStateKeyRef.current = "";
     setStoreStateReady(false);
+    if (catalogSource !== "supabase") {
+      setCart([]);
+      setWishlist([]);
+      setStoreStateReady(true);
+      return () => { active = false; };
+    }
     const readLocal = (key: string) => {
       try { return parseStoredState(JSON.parse(window.localStorage.getItem(key) ?? "null")); }
       catch { return { cartItems: [], wishlistProductIds: [] }; }
@@ -1699,104 +1711,83 @@ function CountUp({ value, duration = 2600 }: { value: number; duration?: number 
 }
 
 function BrandBento() {
-  // Unsplash: Annie Spratt, "a room with a bed, mirror and lamp".
-  const backdropImage = "https://images.unsplash.com/photo-1676807882747-81bd093e61b6?auto=format&fit=crop&w=2400&q=85";
+  const lampImage = U("photo-1775667693473-91e07000bb1a", 1000);
+  const mirrorImage = U("photo-1542485028-6e019f9c8a8e", 700);
+  const artisanImage = U("photo-1774428571582-9bd41e95a6ca", 800);
+  const tableImage = U("photo-1784651859128-b04c1d4732f3", 800);
+  const shadeImage = U("photo-1774444052266-2e4b58d85c3b", 800);
+  const accentImage = U("photo-1513506003901-1e6a229e2d15", 700);
+  // Unsplash: Chris LaBarge, "Dark floral painting above a wooden desk with lamp".
+  const backdropImage = "https://images.unsplash.com/photo-1769320064954-5c8a7eefc2ab?auto=format&fit=crop&w=2400&q=85";
+
+  const photoTile = (image: string, className: string, imageClassName = "") => (
+    <div
+      aria-hidden="true"
+      className={`group relative isolate min-h-[180px] cursor-pointer overflow-hidden rounded-[18px] border border-white/80 bg-[#e9e2d8] shadow-[0_10px_28px_rgba(46,38,27,0.12)] transition-[border-color,box-shadow] duration-500 hover:border-white hover:shadow-[0_18px_48px_rgba(26,22,18,0.24)] xl:min-h-0 ${className}`}
+    >
+      <img src={image} alt="" loading="lazy" decoding="async" className={`absolute inset-0 h-full w-full scale-100 object-cover will-change-transform transition-transform duration-[1800ms] ease-in-out group-hover:scale-[1.05] ${imageClassName}`} />
+      <span className="absolute inset-0 bg-gradient-to-t from-[#171512]/25 via-transparent to-[#171512]/5" />
+    </div>
+  );
 
   return (
     <Reveal>
-      <section className="relative isolate overflow-hidden bg-[#F5F2EC] py-16 md:py-24">
-        <img aria-hidden="true" src={backdropImage} alt="" loading="lazy" decoding="async" className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center brightness-[1.08] saturate-[0.92]" />
-        <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-br from-[#F8F5EE]/42 via-[#F6F1E8]/34 to-[#E9E1D5]/28" />
-        <div className="relative z-10 mx-auto max-w-[1440px] px-5 md:px-8">
-          <div className="mb-9 md:mb-11 flex items-end justify-between gap-5">
+      <section className="relative isolate overflow-hidden bg-[#292725] py-20 md:py-28 xl:py-32">
+        <img aria-hidden="true" src={backdropImage} alt="" loading="lazy" decoding="async" className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center brightness-[0.52] saturate-[0.56] contrast-[0.92]" />
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-br from-[#292725]/68 via-[#39332f]/64 to-[#242526]/70" />
+        <div className="relative z-10 mx-auto max-w-[1760px] px-4 sm:px-6 xl:px-8 2xl:px-12">
+          <div className="mb-8 flex items-end justify-between gap-5 sm:mb-10 xl:mb-12">
             <div>
-              <p className="text-[10px] font-medium tracking-[0.18em] uppercase text-[#8B642E] mb-3">Why Cloud Lamps & Mirrors</p>
-              <h2 className="text-[30px] md:text-[38px] font-light text-[#29251F]" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.02em" }}>
+              <p className="mb-3 text-[10px] font-medium tracking-[0.18em] uppercase text-[#D2A86B] sm:text-[11px]">Why Cloud Lamps & Mirrors</p>
+              <h2 className="text-[34px] font-light leading-tight text-[#F3EEE7] sm:text-[40px] xl:text-[48px] 2xl:text-[54px]" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.02em" }}>
                 Details that shape a room
               </h2>
             </div>
-            <span className="hidden sm:inline-flex items-center gap-2 text-[9px] tracking-[0.14em] uppercase text-[#6F675B] pb-1">
+            <span className="hidden sm:inline-flex items-center gap-2 pb-1 text-[10px] tracking-[0.14em] uppercase text-[#D1C6B8]">
               <span className="w-7 h-px bg-[#C9A362]" /> Thoughtfully made
             </span>
           </div>
 
-          {/* Desktop bento */}
-          <div className="hidden lg:grid lg:grid-cols-12 lg:grid-rows-2 gap-3.5" style={{ minHeight: 390 }}>
-            <div className="relative overflow-hidden col-span-5 row-span-2 rounded-2xl border border-white/70 bg-[#F2EBDD]/95 p-8 flex flex-col justify-between text-[#29251F] shadow-[0_20px_55px_rgba(64,48,27,0.16)]">
-              <span className="relative text-[9px] tracking-[0.16em] uppercase text-[#786F62]">01 <span className="mx-2 text-[#B8AA96]">/</span> Our promise</span>
-              <div className="relative max-w-[390px]">
-                <p className="text-[9px] font-medium tracking-[0.18em] uppercase text-[#8B642E] mb-4">Crafted with intention</p>
-                <h3 className="text-[30px] font-light text-[#29251F] leading-tight mb-4 whitespace-pre-line" style={{ fontFamily: "'Fraunces', serif", letterSpacing: "-0.02em" }}>
-                  {"Museum-grade craft,\nhonest price."}
-                </h3>
-                <p className="text-[13px] text-[#615B52] leading-relaxed">
-                  Every piece at Cloud Lamps & Mirrors is chosen to shape the light, mood, and character of a room.
-                </p>
-              </div>
-            </div>
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:auto-rows-[300px] xl:grid-cols-12 xl:gap-4 2xl:auto-rows-[320px]">
+            {photoTile(lampImage, "col-span-2 min-h-[250px] sm:min-h-[310px] xl:col-span-3 xl:row-span-2", "object-[center_58%]")}
 
-            <div className="relative overflow-hidden col-span-3 rounded-2xl border border-white/75 bg-[#F5EEE1]/96 p-6 flex flex-col justify-between shadow-[0_14px_40px_rgba(64,48,27,0.13)]">
-              <span className="text-[9px] tracking-[0.14em] uppercase text-[#827768]">Made for real homes</span>
+            <article className="col-span-2 flex min-h-[180px] cursor-pointer flex-col justify-between rounded-[18px] border border-white/85 bg-[#f4eee4] p-5 text-[#29251f] shadow-[0_10px_28px_rgba(46,38,27,0.1)] transition-[border-color,box-shadow] duration-500 hover:border-white hover:shadow-[0_18px_48px_rgba(26,22,18,0.2)] sm:col-span-1 xl:col-span-2 xl:p-6">
+              <p className="text-[12px] font-medium uppercase tracking-[0.15em] text-[#927044] sm:text-[13px]">Crafted with intention</p>
               <div>
-                <p className="text-[42px] font-light text-[#28251F] leading-none mb-3" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={2400} /></p>
-                <p className="text-[9px] tracking-[0.14em] uppercase text-[#766F65]">Homes illuminated</p>
+                <h3 className="mb-3 text-[30px] font-light leading-[1.06] sm:text-[34px] xl:text-[40px]" style={{ fontFamily: "'Fraunces', serif" }}>Museum-grade craft, honest price.</h3>
+                <p className="text-[15px] leading-relaxed text-[#70685d] xl:text-[16px]">Beautiful details, made for everyday rooms.</p>
               </div>
-            </div>
+            </article>
 
-            <div className="relative overflow-hidden col-span-4 rounded-2xl border border-white/70 bg-[#E7E8DE]/96 p-6 flex flex-col justify-between shadow-[0_14px_40px_rgba(64,48,27,0.13)]">
-              <span className="text-[9px] tracking-[0.14em] uppercase text-[#6D7565]">Made with skilled hands</span>
-              <div>
-                <p className="text-[42px] font-light text-[#4D5947] leading-none mb-3" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={40} /></p>
-                <p className="text-[9px] tracking-[0.14em] uppercase text-[#68715F]">Artisan partners</p>
-              </div>
-            </div>
+            <article className="group relative col-span-1 flex min-h-[180px] cursor-pointer flex-col justify-between overflow-hidden rounded-[18px] border border-white/85 bg-[#f4eee4] p-4 text-[#29251f] shadow-[0_10px_28px_rgba(46,38,27,0.1)] transition-[border-color,box-shadow] duration-500 hover:border-white hover:shadow-[0_18px_48px_rgba(26,22,18,0.2)] sm:p-5 xl:col-span-2 xl:p-6">
+              <img src={mirrorImage} alt="" loading="lazy" decoding="async" className="absolute bottom-0 right-0 h-[76%] w-[48%] scale-100 object-cover object-center opacity-90 will-change-transform transition-transform duration-[1800ms] ease-in-out group-hover:scale-[1.05] [mask-image:linear-gradient(to_right,transparent,black_35%)]" />
+              <p className="relative text-[11px] uppercase tracking-[0.12em] text-[#827768] sm:text-[12px]">Made for real homes</p>
+              <div className="relative"><p className="text-[40px] font-light leading-none sm:text-[46px] xl:text-[54px]" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={2400} /></p><p className="mt-2 text-[11px] uppercase tracking-[0.12em] text-[#766f65] sm:text-[12px]">Homes illuminated</p></div>
+            </article>
 
-            <div className="col-span-3 rounded-2xl border border-white/75 bg-[#F8F4EB]/96 p-6 flex flex-col justify-center gap-6 shadow-[0_14px_40px_rgba(64,48,27,0.13)]">
-              <div className="w-9 h-9 rounded-lg bg-[#EEE7DB] flex items-center justify-center">
-                <Package size={16} className="text-[#8B642E]" strokeWidth={1.5} />
-              </div>
-              <div>
-                <p className="text-[13px] font-semibold text-[#28251F] mb-1.5">Ready to ship</p>
-                <p className="text-[11px] text-[#766F65] leading-relaxed">Small-batch pieces, checked before dispatch.</p>
-              </div>
-            </div>
+            <article className="group relative col-span-1 flex min-h-[180px] cursor-pointer flex-col justify-between overflow-hidden rounded-[18px] border border-white/85 bg-[#e6e8df] p-4 text-[#4d5947] shadow-[0_10px_28px_rgba(46,38,27,0.1)] transition-[border-color,box-shadow] duration-500 hover:border-white hover:shadow-[0_18px_48px_rgba(26,22,18,0.2)] sm:p-5 xl:col-span-3 xl:p-6">
+              <img src={artisanImage} alt="" loading="lazy" decoding="async" className="absolute inset-y-0 right-0 h-full w-[48%] scale-100 object-cover object-center opacity-80 will-change-transform transition-transform duration-[1800ms] ease-in-out group-hover:scale-[1.05] [mask-image:linear-gradient(to_right,transparent,black_38%)]" />
+              <p className="relative text-[11px] uppercase tracking-[0.12em] text-[#6d7565] sm:text-[12px]">Made with skilled hands</p>
+              <div className="relative"><p className="text-[40px] font-light leading-none sm:text-[46px] xl:text-[54px]" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={40} /></p><p className="mt-2 text-[11px] uppercase tracking-[0.12em] text-[#68715f] sm:text-[12px]">Artisan partners</p></div>
+            </article>
 
-            <div className="col-span-4 rounded-2xl border border-white/70 bg-[#E7E8DE]/96 p-6 flex flex-col justify-center gap-6 shadow-[0_14px_40px_rgba(64,48,27,0.13)]">
-              <div className="w-9 h-9 rounded-lg bg-[#D8DED2] flex items-center justify-center">
-                <Shield size={16} className="text-[#56634D]" strokeWidth={1.5} />
-              </div>
-              <div>
-                <p className="text-[13px] font-semibold text-[#28251F] mb-1.5">Quality materials</p>
-                <p className="text-[11px] text-[#62685B] leading-relaxed">Considered materials: glass, brass, linen, and solid wood.</p>
-              </div>
-            </div>
-          </div>
+            {photoTile(tableImage, "col-span-1 min-h-[180px] sm:col-span-1 xl:col-span-2", "object-[center_58%]")}
+            {photoTile(shadeImage, "col-span-1 min-h-[180px] sm:col-span-1 xl:col-span-2", "object-[center_52%]")}
 
-          {/* Mobile bento */}
-          <div className="lg:hidden grid grid-cols-2 gap-3 md:gap-4">
-            <div className="col-span-2 rounded-2xl border border-white/70 bg-[#F2EBDD]/95 p-6 text-[#29251F] shadow-[0_16px_40px_rgba(64,48,27,0.16)] md:p-7">
-              <p className="text-[9px] font-medium tracking-[0.18em] uppercase text-[#8B642E] mb-3">Crafted with intention</p>
-              <h3 className="text-[23px] font-light text-[#29251F] leading-tight mb-3" style={{ fontFamily: "'Fraunces', serif" }}>
-                  {"Museum-grade craft,\nhonest price."}
-              </h3>
-              <p className="text-[12px] text-[#615B52] leading-relaxed">Every piece at Cloud Lamps &amp; Mirrors is chosen to shape the light, mood, and character of a room.</p>
-            </div>
-            <div className="min-h-[142px] rounded-2xl border border-white/75 bg-[#F5EEE1]/96 p-5 flex flex-col justify-between shadow-[0_12px_30px_rgba(64,48,27,0.12)]">
-              <p className="text-[32px] font-light text-[#28251F] leading-none" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={2400} /></p>
-              <p className="text-[9px] tracking-[0.12em] uppercase text-[#766F65]">Homes illuminated</p>
-            </div>
-            <div className="min-h-[142px] rounded-2xl border border-white/70 bg-[#E7E8DE]/96 p-5 flex flex-col justify-between shadow-[0_12px_30px_rgba(64,48,27,0.12)]">
-              <p className="text-[32px] font-light text-[#4D5947] leading-none" style={{ fontFamily: "'Fraunces', serif" }}><CountUp value={40} /></p>
-              <p className="text-[9px] tracking-[0.12em] uppercase text-[#68715F]">Artisan partners</p>
-            </div>
-            <div className="min-h-[150px] rounded-2xl border border-white/75 bg-[#F8F4EB]/96 p-5 flex flex-col justify-between shadow-[0_12px_30px_rgba(64,48,27,0.12)]">
-              <div className="w-8 h-8 rounded-lg bg-[#EEE7DB] flex items-center justify-center"><Package size={15} className="text-[#8B642E]" /></div>
-              <div><p className="text-[12px] font-semibold text-[#28251F] mb-1">Ready to ship</p><p className="text-[10px] text-[#766F65] leading-relaxed">Small-batch pieces, checked before dispatch.</p></div>
-            </div>
-            <div className="min-h-[150px] rounded-2xl border border-white/70 bg-[#E7E8DE]/96 p-5 flex flex-col justify-between shadow-[0_12px_30px_rgba(64,48,27,0.12)]">
-              <div className="w-8 h-8 rounded-lg bg-[#D8DED2] flex items-center justify-center"><Shield size={15} className="text-[#56634D]" /></div>
-              <div><p className="text-[12px] font-semibold text-[#28251F] mb-1">Quality materials</p><p className="text-[10px] text-[#62685B] leading-relaxed">Considered materials: glass, brass, linen, and solid wood.</p></div>
-            </div>
+            <article className="col-span-1 flex min-h-[180px] cursor-pointer flex-col justify-between rounded-[18px] border border-white/85 bg-[#fbf8f1] p-4 text-[#29251f] shadow-[0_10px_28px_rgba(46,38,27,0.1)] transition-[border-color,box-shadow] duration-500 hover:border-white hover:shadow-[0_18px_48px_rgba(26,22,18,0.2)] sm:p-5 xl:col-span-3 xl:p-6">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#eee7db]"><Package size={17} className="text-[#8b642e]" strokeWidth={1.5} /></div>
+              <div><p className="mb-1 text-[17px] font-semibold xl:text-[19px]">Ready to ship</p><p className="text-[14px] leading-relaxed text-[#766f65] xl:text-[15px]">Small-batch pieces, checked before dispatch.</p></div>
+            </article>
+
+            <article className="col-span-1 flex min-h-[180px] cursor-pointer flex-col justify-between rounded-[18px] border border-white/85 bg-[#e6e8df] p-4 text-[#29251f] shadow-[0_10px_28px_rgba(46,38,27,0.1)] transition-[border-color,box-shadow] duration-500 hover:border-white hover:shadow-[0_18px_48px_rgba(26,22,18,0.2)] sm:p-5 xl:col-span-2 xl:p-6">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#d8ded2]"><Shield size={17} className="text-[#56634d]" strokeWidth={1.5} /></div>
+              <div><p className="mb-1 text-[17px] font-semibold xl:text-[19px]">Quality materials</p><p className="text-[14px] leading-relaxed text-[#62685b] xl:text-[15px]">Glass, brass, linen, and solid wood.</p></div>
+            </article>
+
+            <article className="group relative col-span-2 flex min-h-[180px] cursor-pointer items-end justify-between gap-3 overflow-hidden rounded-[18px] border border-white/85 bg-[#f1e9dd] p-4 text-[#29251f] shadow-[0_10px_28px_rgba(46,38,27,0.1)] transition-[border-color,box-shadow] duration-500 hover:border-white hover:shadow-[0_18px_48px_rgba(26,22,18,0.2)] sm:p-5 xl:col-span-2 xl:min-h-0 xl:p-6">
+              <div className="relative z-10 max-w-[58%]"><p className="mb-2 text-[12px] uppercase tracking-[0.12em] text-[#927044]">Pairing suggestion</p><p className="text-[20px] leading-tight sm:text-[22px] xl:text-[25px]" style={{ fontFamily: "'Fraunces', serif" }}>A lamp, a shade, a softer room.</p></div>
+              <img src={accentImage} alt="" loading="lazy" decoding="async" className="absolute right-2 top-2 h-[82%] w-[43%] rounded-xl object-cover object-center scale-100 will-change-transform transition-transform duration-[1800ms] ease-in-out group-hover:scale-[1.05]" />
+            </article>
           </div>
         </div>
       </section>
@@ -2085,7 +2076,7 @@ function matchesPrice(p: Product, min: number, max: number) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ListingPage({ params }: { params?: Record<string, string> }) {
-  const { navigate, products } = useApp();
+  const { navigate, products, catalogSource } = useApp();
   const cat = params?.category || "all";
   const [sort, setSort] = useState("relevance");
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
@@ -2143,8 +2134,8 @@ function ListingPage({ params }: { params?: Record<string, string> }) {
 
   // Calculate catalog min & max prices
   const catalogPrices = products.map((p) => (p.salePrice ?? p.basePrice) / 100);
-  const ABS_MIN = Math.floor(Math.min(...catalogPrices) / 10) * 10;
-  const ABS_MAX = Math.ceil(Math.max(...catalogPrices) / 100) * 100;
+  const ABS_MIN = catalogPrices.length ? Math.floor(Math.min(...catalogPrices) / 10) * 10 : 0;
+  const ABS_MAX = catalogPrices.length ? Math.ceil(Math.max(...catalogPrices) / 100) * 100 : 100000;
 
   const [minPrice, setMinPrice] = useState<number>(ABS_MIN);
   const [maxPrice, setMaxPrice] = useState<number>(ABS_MAX);
@@ -2186,7 +2177,7 @@ function ListingPage({ params }: { params?: Record<string, string> }) {
     setSelectedBadges([]);
     setMinPrice(ABS_MIN);
     setMaxPrice(ABS_MAX);
-  }, [cat]);
+  }, [cat, ABS_MIN, ABS_MAX]);
 
   // Dynamic count calculators (computed relative to base categoryProducts)
   const getMaterialCount = (id: string) =>
@@ -2699,6 +2690,18 @@ function ListingPage({ params }: { params?: Record<string, string> }) {
                   return cards;
                 })}
               </div>
+            ) : catalogSource === "loading" ? (
+              <div role="status" className="rounded-lg border border-[#DBD5C7] bg-white px-6 py-20 text-center text-[13px] text-[#8A8377]">Loading the collection…</div>
+            ) : catalogSource !== "supabase" ? (
+              <div role="alert" className="rounded-lg border border-[#DBD5C7] bg-white px-6 py-20 text-center">
+                <h3 className="mb-2 text-[22px] font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>Products are temporarily unavailable</h3>
+                <p className="mx-auto max-w-md text-[13px] text-[#8A8377]">The store could not load its catalog. Please try again shortly.</p>
+              </div>
+            ) : products.length === 0 ? (
+              <div className="rounded-lg border border-[#DBD5C7] bg-white px-6 py-20 text-center">
+                <h3 className="mb-2 text-[22px] font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>The collection is being prepared</h3>
+                <p className="mx-auto max-w-md text-[13px] text-[#8A8377]">New pieces will appear here as they become available.</p>
+              </div>
             ) : (
               <div className="py-24 px-6 text-center bg-[#FFFFFF] border border-[#DBD5C7] rounded-lg">
                 <Filter size={32} className="mx-auto text-[#8A8377] mb-3 opacity-60" />
@@ -2783,11 +2786,11 @@ function ListingPage({ params }: { params?: Record<string, string> }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ProductPage({ params }: { params?: Record<string, string> }) {
-  const { navigate, addToCart, closeMiniCart, toggleWishlist, wishlist, user, authReady, products } = useApp();
+  const { navigate, addToCart, closeMiniCart, toggleWishlist, wishlist, user, authReady, products, catalogSource } = useApp();
   const matchingProduct = products.find((p) => p.id === params?.id);
-  const product = matchingProduct || products[0] || PRODUCTS[0];
-
-  const [selectedSize, setSelectedSize] = useState(product.sizes?.[1]?.label ?? product.sizes?.[0]?.label);
+  const productId = matchingProduct?.id;
+  const initialSize = matchingProduct?.sizes?.[1]?.label ?? matchingProduct?.sizes?.[0]?.label;
+  const [selectedSize, setSelectedSize] = useState<string | undefined>(undefined);
   const [colorIdx, setColorIdx] = useState(0);
   const [imgIdx, setImgIdx] = useState(0);
   const [quantity, setQuantity] = useState(1);
@@ -2797,9 +2800,19 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
   const [reviewsLoading, setReviewsLoading] = useState(true);
   const [reviewsError, setReviewsError] = useState("");
   useEffect(() => {
+    setSelectedSize(initialSize);
+  }, [productId, initialSize]);
+  useEffect(() => {
+    if (!productId) {
+      setProductReviews([]);
+      setReviewsLoading(false);
+      setReviewsError("");
+      return;
+    }
     let active = true;
     setReviewsLoading(true);
-    apiFetch(`/api/reviews?product=${encodeURIComponent(product.id)}`, { cache: "no-store" })
+    setReviewsError("");
+    apiFetch(`/api/reviews?product=${encodeURIComponent(productId)}`, { cache: "no-store" })
       .then(async (response) => {
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || "Reviews are unavailable.");
@@ -2809,7 +2822,10 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
       .catch((error: unknown) => { if (active) setReviewsError(error instanceof Error ? error.message : "Reviews are unavailable."); })
       .finally(() => { if (active) setReviewsLoading(false); });
     return () => { active = false; };
-  }, [product.id]);
+  }, [productId]);
+  if (catalogSource === "loading") {
+    return <section className="mx-auto flex min-h-[60vh] max-w-3xl items-center justify-center px-6 text-center text-sm text-[#8A8377]" role="status">Loading product…</section>;
+  }
   if (!matchingProduct) {
     return (
       <section className="mx-auto flex min-h-[60vh] max-w-3xl flex-col items-center justify-center px-6 text-center">
@@ -2821,6 +2837,7 @@ function ProductPage({ params }: { params?: Record<string, string> }) {
       </section>
     );
   }
+  const product = matchingProduct;
   const selectedDimensions = (selectedSize && product.sizeDimensions?.[selectedSize]) || product.dimensions;
   const dimensionRows = typeof selectedDimensions === "string" && selectedDimensions
     ? [["Dimensions", selectedDimensions]]
@@ -4211,7 +4228,7 @@ function AccountAuthPage() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
-  const [authStep, setAuthStep] = useState<"form" | "signup-otp" | "recovery-otp" | "recovery-password">("form");
+  const [authStep, setAuthStep] = useState<"form" | "recovery-otp" | "recovery-password">("form");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [pending, setPending] = useState(false);
@@ -4236,9 +4253,9 @@ function AccountAuthPage() {
   const isPasswordUpdate = route === "reset-password" || authStep === "recovery-password";
   const isRecoveryRequest = route === "forgot-password";
   const isRegistration = route === "register";
-  const isOtpStep = authStep === "signup-otp" || authStep === "recovery-otp";
+  const isOtpStep = authStep === "recovery-otp";
   const isSignIn = !isRegistration && !isRecoveryRequest && !isPasswordUpdate;
-  const title = isRegistration ? authStep === "signup-otp" ? "Verify your mobile number" : "Create your account" : isRecoveryRequest ? isPasswordUpdate ? "Choose a new password" : authStep === "recovery-otp" ? "Verify your mobile number" : "Reset your password" : isPasswordUpdate ? "Choose a new password" : "Welcome back";
+  const title = isRegistration ? "Create your account" : isRecoveryRequest ? isPasswordUpdate ? "Choose a new password" : authStep === "recovery-otp" ? "Verify your mobile number" : "Reset your password" : isPasswordUpdate ? "Choose a new password" : "Welcome back";
   const inputClass = "w-full rounded-md border border-[#DBD5C7] bg-white px-4 py-3 text-sm text-[#1A1815] placeholder:text-[#9A9388] outline-none transition focus:border-[#A67C3D] focus:ring-2 focus:ring-[#A67C3D]/15";
 
   useEffect(() => {
@@ -4286,12 +4303,7 @@ function AccountAuthPage() {
     setError("");
     setNotice("");
     try {
-      if (isRegistration && authStep === "signup-otp") {
-        if (!/^\d{6}$/.test(otp)) throw new Error("Enter the 6-digit code sent to your phone.");
-        const { error: authError } = await supabase.auth.verifyOtp({ phone, token: otp, type: "sms" });
-        if (authError) throw authError;
-        navigateAfterAuth();
-      } else if (isRegistration) {
+      if (isRegistration) {
         const normalizedPhone = normalizeCustomerPhone(phone);
         if (password.length < 8) throw new Error("Choose a password with at least 8 characters.");
         if (password !== confirmPassword) throw new Error("Your passwords do not match.");
@@ -4302,14 +4314,10 @@ function AccountAuthPage() {
           options: { data: { full_name: name.trim() } },
         });
         if (authError) throw authError;
-        if (data.session) {
-          const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
-          if (signOutError) throw signOutError;
-          const { error: otpError } = await supabase.auth.signInWithOtp({ phone: normalizedPhone, options: { shouldCreateUser: false } });
-          if (otpError) throw otpError;
+        if (!data.session) {
+          throw new Error("Account created, but sign-in is still waiting for phone verification. In Supabase, turn off Phone confirmations to allow password sign-up without SMS OTP.");
         }
-        setAuthStep("signup-otp");
-        setNotice("Enter the 6-digit code sent by SMS to verify your mobile number.");
+        navigateAfterAuth();
       } else if (isRecoveryRequest && authStep === "recovery-otp") {
         if (!/^\d{6}$/.test(otp)) throw new Error("Enter the 6-digit code sent to your phone.");
         const { error: authError } = await supabase.auth.verifyOtp({ phone, token: otp, type: "sms" });
@@ -4421,7 +4429,7 @@ function AccountAuthPage() {
       <div className="mx-auto w-full max-w-md rounded-xl border border-[#E5DFD3] bg-white p-6 shadow-[0_18px_55px_rgba(26,24,21,0.07)] sm:p-9">
         <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.18em] text-[#A67C3D]">Customer account</p>
         <h1 className="mb-2 text-3xl font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>{title}</h1>
-        <p className="mb-7 text-sm leading-6 text-[#777168]">{isRegistration ? authStep === "signup-otp" ? `Enter the 6-digit code sent to ${phone}.` : "Create an account with your mobile number and a password." : isRecoveryRequest ? isPasswordUpdate ? "Choose a new password for your account." : authStep === "recovery-otp" ? `Enter the 6-digit code sent to ${phone}.` : "Enter your mobile number and we’ll send a verification code by SMS." : isPasswordUpdate ? "Choose a new password for your account." : "Sign in with your mobile number and password."}</p>
+        <p className="mb-7 text-sm leading-6 text-[#777168]">{isRegistration ? "Create an account with your mobile number and a password. SMS verification is not required." : isRecoveryRequest ? isPasswordUpdate ? "Choose a new password for your account." : authStep === "recovery-otp" ? `Enter the 6-digit code sent to ${phone}.` : "Enter your mobile number and we’ll send a verification code by SMS." : isPasswordUpdate ? "Choose a new password for your account." : "Sign in with your mobile number and password."}</p>
 
         {!configured && <p role="status" className="mb-5 rounded-md border border-[#D9C79E] bg-[#FAF5E9] p-3 text-xs leading-5 text-[#695632]">Supabase is not configured yet. Add your project URL and publishable key to <code>.env.local</code>, then restart the development server.</p>}
         {confirmationIssue && <p role="alert" className="mb-4 text-xs text-[#A33E34]">That confirmation link could not be completed. Please request a new verification code.</p>}
@@ -4480,8 +4488,6 @@ function AppInner() {
 export default function App() {
   return <AppInner />;
 }
-
-
 
 
 
