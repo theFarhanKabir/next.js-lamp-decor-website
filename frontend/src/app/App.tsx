@@ -244,7 +244,12 @@ function formatPrice(p: number): string {
 }
 
 function productImageSrcSet(product: Product, imageUrl: string) {
-  const variants = product.imageVariants?.[imageUrl];
+  const variants = product.imageVariants?.[imageUrl]
+    ?? product.swatches.find((swatch) => swatch.imageUrl === imageUrl)?.imageVariants;
+  return responsiveImageSrcSet(variants);
+}
+
+function responsiveImageSrcSet(variants?: { url: string; width: number }[]) {
   return variants?.length ? variants.map((variant) => `${variant.url} ${variant.width}w`).join(", ") : undefined;
 }
 
@@ -791,6 +796,13 @@ function ProductCard({ product, index = 0 }: { product: Product; index?: number 
   const { addToCart, closeMiniCart, toggleWishlist, wishlist, navigate } = useApp();
   const [hovered, setHovered] = useState(false);
   const [swatchIdx, setSwatchIdx] = useState(0);
+  const [swatchInteracted, setSwatchInteracted] = useState(false);
+  const selectedSwatch = product.swatches[swatchIdx];
+  const selectedSwatchImage = selectedSwatch?.imageUrl;
+  const cardImage = selectedSwatchImage || product.images.silo;
+  const cardImageSrcSet = selectedSwatchImage ? responsiveImageSrcSet(selectedSwatch.imageVariants) : product.images.siloSrcSet;
+  const hoverImage = swatchInteracted && selectedSwatchImage ? selectedSwatchImage : product.images.lifestyle;
+  const hoverImageSrcSet = swatchInteracted && selectedSwatchImage ? responsiveImageSrcSet(selectedSwatch.imageVariants) : product.images.lifestyleSrcSet;
   const isWished = wishlist.includes(product.id);
   const displayPrice = product.salePrice ?? product.basePrice;
 
@@ -818,8 +830,8 @@ function ProductCard({ product, index = 0 }: { product: Product; index?: number 
           }}
         >
           <img
-            src={product.images.silo}
-            srcSet={product.images.siloSrcSet}
+            src={cardImage}
+            srcSet={cardImageSrcSet}
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
             alt={product.name}
             onError={handleImgError}
@@ -827,8 +839,8 @@ function ProductCard({ product, index = 0 }: { product: Product; index?: number 
             style={{ opacity: hovered ? 0 : 1, transform: "scale(1.12)" }}
           />
           <img
-            src={product.images.lifestyle}
-            srcSet={product.images.lifestyleSrcSet}
+            src={hoverImage}
+            srcSet={hoverImageSrcSet}
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
             alt=""
             onError={handleImgError}
@@ -861,7 +873,7 @@ function ProductCard({ product, index = 0 }: { product: Product; index?: number 
                   {product.swatches.slice(0, 4).map((sw, i) => (
                     <button
                       key={sw.label}
-                      onClick={(e) => { e.stopPropagation(); setSwatchIdx(i); }}
+                      onClick={(e) => { e.stopPropagation(); setSwatchIdx(i); setSwatchInteracted(true); }}
                       aria-label={`Colour: ${sw.label}`}
                       className="rounded-full border-2 transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
                       style={{
@@ -1522,7 +1534,7 @@ function HeroSection() {
           className="absolute inset-0 transition-opacity duration-700"
           style={{ opacity: i === activeIndex ? 1 : 0 }}
         >
-          <img src={s.image} alt={s.alt} onError={handleImgError} className="w-full h-full object-cover" />
+          <img src={s.image} srcSet={responsiveImageSrcSet(s.imageVariants)} sizes="100vw" alt={s.alt} onError={handleImgError} className="w-full h-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-r from-[#18242E]/55 via-[#263847]/20 to-transparent" />
           <div className="absolute inset-0 bg-gradient-to-t from-[#12191F]/35 via-transparent to-transparent" />
         </div>
@@ -1620,7 +1632,7 @@ function CategorySection() {
           <Reveal key={category.slug} delay={index * 70}>
             <button type="button" onClick={() => navigate("listing", { category: category.slug })} aria-label={`Browse ${category.name}`} className="group block w-full text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#A67C3D] focus-visible:ring-offset-4">
               <span className="relative mb-3 block aspect-square overflow-hidden rounded-[4px] bg-[#FFFFFF]">
-                <img src={category.image} alt={category.alt} onError={handleImgError} loading="lazy" className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" />
+                <img src={category.image} srcSet={responsiveImageSrcSet(category.imageVariants)} sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 16vw" alt={category.alt} onError={handleImgError} loading="lazy" className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" />
                 <span aria-hidden="true" className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors duration-300 group-hover:bg-black/25 group-focus-visible:bg-black/25">
                   <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-2xl font-light text-[#1A1815] opacity-0 shadow-sm transition-opacity duration-300 group-hover:opacity-100 group-focus-visible:opacity-100">+</span>
                 </span>
@@ -1831,7 +1843,7 @@ function HotDeals() {
                   <div className="group w-full text-left">
                     <div className="relative mb-3 aspect-[4/5] overflow-hidden rounded-lg bg-[#FFFFFF]">
                       <button type="button" onClick={() => navigate("product", { id: product.id })} aria-label={`View ${deal.name}`} className="absolute inset-0 h-full w-full">
-                      <img src={deal.image} alt={deal.alt || deal.name} onError={handleImgError} className="absolute inset-0 h-full w-full scale-[1.12] object-cover transition-transform duration-500 group-hover:scale-[1.16]" />
+                      <img src={deal.image} srcSet={responsiveImageSrcSet(deal.imageVariants)} sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw" alt={deal.alt || deal.name} onError={handleImgError} className="absolute inset-0 h-full w-full scale-[1.12] object-cover transition-transform duration-500 group-hover:scale-[1.16]" />
                         <span className="absolute top-3 left-3 rounded-full bg-[#A64C3C] px-3 py-1.5 text-[9px] font-semibold tracking-wider uppercase text-white">Hot deal</span>
                       </button>
                       <div className="product-card-desktop-actions absolute inset-x-0 bottom-0 z-10 translate-y-full bg-gradient-to-t from-black/45 to-transparent px-3 pb-3 pt-12 transition-transform duration-300 group-hover:translate-y-0 group-focus-within:translate-y-0">
@@ -1999,6 +2011,7 @@ function HomePage() {
       <HeroSection />
       <CategorySection />
       <HotDeals />
+      <NewArrivals />
       <PreFooterCTA />
       <EditorialBreak />
       <ServiceStrip />
