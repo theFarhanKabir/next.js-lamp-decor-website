@@ -79,6 +79,9 @@ interface AppCtx {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const FALLBACK_IMG = "https://images.unsplash.com/photo-1775667693473-91e07000bb1a?auto=format&fit=crop&w=800&q=80";
+// Temporary demo switch. Set to true to restore customer authentication after SMS verification is configured.
+const CUSTOMER_AUTH_ENABLED = false;
+const CUSTOMER_AUTH_ROUTES = new Set(["account", "login", "register", "forgot-password", "reset-password"]);
 
 function handleImgError(e: React.SyntheticEvent<HTMLImageElement, Event>) {
   e.currentTarget.onerror = null;
@@ -757,11 +760,11 @@ function CustomerReviews({
           <h2 className="font-serif text-[26px] leading-tight text-[#1A1815] sm:text-[30px]">Customer Reviews</h2>
           <p className="mt-2 text-[13px] text-[#8A8377]">Thoughts on {product.name}</p>
         </div>
-        {user ? (
+        {CUSTOMER_AUTH_ENABLED && user ? (
           <button type="button" onClick={() => { setFormOpen((open) => !open); setNotice(""); }} className="rounded border border-[#1A1815] px-5 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-[#1A1815] transition hover:bg-[#1A1815] hover:text-white">{formOpen ? "Close review form" : "Write a review"}</button>
-        ) : (
+        ) : CUSTOMER_AUTH_ENABLED ? (
           <button type="button" disabled={!authReady} onClick={() => navigate("login")} className="rounded border border-[#1A1815] px-5 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-[#1A1815] transition hover:bg-[#1A1815] hover:text-white disabled:opacity-50">{authReady ? "Sign in to review" : "Checking account…"}</button>
-        )}
+        ) : null}
       </div>
 
       {(notice || error) && <p role={notice.includes("awaiting approval") ? "status" : "alert"} className={`mb-5 rounded border px-4 py-3 text-[12px] ${notice.includes("awaiting approval") ? "border-[#dce5d7] bg-[#f4f7f1] text-[#53694b]" : "border-[#ead8cf] bg-[#fbf4f0] text-[#9b5544]"}`}>{notice || error}</p>}
@@ -1078,7 +1081,7 @@ function Header() {
             <div className="home-header-actions flex items-center gap-1 ml-auto">
               {[
                 { icon: Search, label: "Search", action: openSearch },
-                { icon: User, label: user ? "My account" : "Sign in", action: () => navigate(user ? "account" : "login") },
+                ...(CUSTOMER_AUTH_ENABLED ? [{ icon: User, label: user ? "My account" : "Sign in", action: () => navigate(user ? "account" : "login") }] : []),
               ].map(({ icon: Icon, label, action }) => (
                 <button
                   key={label}
@@ -1653,7 +1656,7 @@ function NewArrivals() {
     .filter((product): product is Product => Boolean(product));
   if (!homepageContent.newArrivals.active || !arrivals.length) return null;
   return (
-    <section className="bg-[#F8F7F3] px-5 py-12 sm:px-8 md:py-16 xl:px-10">
+    <section className="bg-white px-5 py-12 sm:px-8 md:py-16 xl:px-10">
       <div className="mx-auto max-w-[1440px]">
         <Reveal>
           <div className="mb-7 flex items-end justify-between gap-4">
@@ -3350,11 +3353,6 @@ function CheckoutPage() {
   const inputClass = "w-full rounded border border-[#DBD5C7] bg-white px-4 py-3 text-sm text-[#1A1815] placeholder:text-[#9A9388] transition-colors focus:border-[#A67C3D] focus:outline-none focus:ring-2 focus:ring-[#A67C3D]/15";
   const sectionTitle = "mb-4 text-xs font-semibold uppercase tracking-[0.16em] text-[#4A463F]";
   const choiceClass = (selected: boolean) => `flex w-full cursor-pointer items-start gap-3 rounded border p-4 transition-colors ${selected ? "border-[#A67C3D] bg-[#FFFFFF]" : "border-[#DBD5C7] bg-white hover:border-[#B9AD98]"}`;
-  const continueToSignIn = (route: "login" | "register" = "login") => {
-    try { window.sessionStorage.setItem("cloud-lamps-auth-return", "/checkout"); } catch { /* Navigation still works if storage is unavailable. */ }
-    navigate(route);
-  };
-
   const applyCoupon = async () => {
     if (!couponCode.trim() || validatingCoupon) return;
     setValidatingCoupon(true);
@@ -3464,20 +3462,6 @@ function CheckoutPage() {
 
   if (!authReady) {
     return <section className="mx-auto flex min-h-[60vh] max-w-2xl items-center justify-center px-6 py-16 text-center"><p className="text-sm text-[#8A8377]">Checking your account…</p></section>;
-  }
-
-  if (!user) {
-    return (
-      <section className="mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center px-6 py-16 text-center">
-        <User size={34} strokeWidth={1} className="mb-5 text-[#A67C3D]" />
-        <h1 className="mb-3 text-3xl font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>Sign in to continue</h1>
-        <p className="mb-7 max-w-md text-sm leading-6 text-[#8A8377]">Please sign in to your account before checkout. Your bag will be saved while you sign in.</p>
-        <div className="flex flex-wrap justify-center gap-3">
-          <button type="button" onClick={() => continueToSignIn("login")} className="bg-[#1A1815] px-7 py-3.5 text-[11px] font-medium uppercase tracking-widest text-white transition-colors hover:bg-[#2E2A24]">Sign in</button>
-          <button type="button" onClick={() => continueToSignIn("register")} className="border border-[#DBD5C7] px-7 py-3.5 text-[11px] font-medium uppercase tracking-widest text-[#4A463F] transition-colors hover:bg-white">Create account</button>
-        </div>
-      </section>
-    );
   }
 
   if (cart.length === 0) {
@@ -4208,11 +4192,11 @@ function MobileBottomNav() {
     { label: "Home", icon: Home, action: () => navigate("home"), active: currentPage.name === "home" },
     { label: "Wishlist", icon: Heart, action: () => navigate("wishlist"), count: wishlist.length, active: currentPage.name === "wishlist" },
     { label: "Cart", icon: ShoppingCart, action: openMiniCart, count: cartCount, active: currentPage.name === "cart" },
-    { label: "Profile", icon: User, action: () => navigate(user ? "account" : "login"), active: ["account", "login", "register"].includes(currentPage.name) },
+    ...(CUSTOMER_AUTH_ENABLED ? [{ label: "Profile", icon: User, action: () => navigate(user ? "account" : "login"), active: ["account", "login", "register"].includes(currentPage.name) }] : []),
   ];
 
   return (
-    <nav aria-label="Mobile navigation" className={`mobile-bottom-nav fixed inset-x-0 bottom-0 z-[80] grid ${isIPhone ? "grid-cols-5" : "grid-cols-4"} border-t border-[#E4E4E4] bg-white px-1 md:hidden`}>
+    <nav aria-label="Mobile navigation" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }} className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-[80] grid border-t border-[#E4E4E4] bg-white px-1 md:hidden">
       {items.map(({ label, icon: Icon, action, count, active }) => (
         <button key={label} type="button" onClick={action} aria-label={label} aria-current={active ? "page" : undefined} className={`relative flex h-10 items-center justify-center text-[#171717] transition-colors ${active ? "" : "opacity-75 hover:opacity-100"}`}>
           <Icon size={18} strokeWidth={active ? 2 : 1.7} />
@@ -4232,6 +4216,18 @@ function normalizeCustomerPhone(value: string) {
   if (/^01[3-9]\d{8}$/.test(digits)) return `+880${digits.slice(1)}`;
   if (/^8801[3-9]\d{8}$/.test(digits)) return `+${digits}`;
   throw new Error("Enter a valid Bangladesh mobile number, such as 01712345678.");
+}
+
+function CustomerAccountsUnavailable() {
+  const { navigate } = useApp();
+  return (
+    <section className="mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center px-6 py-16 text-center">
+      <p className="mb-3 text-[10px] font-medium uppercase tracking-[0.2em] text-[#A67C3D]">Customer accounts</p>
+      <h1 className="mb-3 text-3xl font-light text-[#1A1815]" style={{ fontFamily: "'Fraunces', serif" }}>Temporarily unavailable</h1>
+      <p className="mb-7 max-w-md text-sm leading-6 text-[#8A8377]">Customer signup and sign-in are temporarily turned off.</p>
+      <button type="button" onClick={() => navigate("home")} className="rounded bg-[#1A1815] px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-white transition hover:bg-[#332D24]">Continue shopping</button>
+    </section>
+  );
 }
 
 function AccountAuthPage() {
@@ -4488,7 +4484,7 @@ function AppInner() {
         {currentPage.name === "checkout" && <CheckoutPage />}
         {currentPage.name === "cart" && <CartPage />}
         {currentPage.name === "wishlist" && <WishlistPage />}
-        {["account", "login", "register", "forgot-password", "reset-password"].includes(currentPage.name) && <AccountAuthPage />}
+        {CUSTOMER_AUTH_ROUTES.has(currentPage.name) && (CUSTOMER_AUTH_ENABLED ? <AccountAuthPage /> : <CustomerAccountsUnavailable />)}
       </main>
       <MiniCartDrawer />
       <MessengerChatButton />

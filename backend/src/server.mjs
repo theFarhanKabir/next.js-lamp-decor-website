@@ -163,6 +163,13 @@ async function customer(request) {
   return result;
 }
 
+async function optionalCustomer(request) {
+  if (!request.headers.authorization) return null;
+  const result = await requireUser(request);
+  if (result.error) throw new HttpError(result.error.status, result.error.message);
+  return result.user.is_anonymous ? null : result.user;
+}
+
 function normalizeCartOptions(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const options = {};
@@ -823,8 +830,7 @@ async function startSslCommerzSession({ settings, transactionId, order, saved, b
 }
 
 async function handleCreateOrder(request, response, { onlinePayment = false } = {}) {
-  const auth = await customer(request);
-  if (auth.user.is_anonymous) throw new HttpError(401, "Create an account or sign in before checkout.");
+  const customerUser = await optionalCustomer(request);
   const gatewaySettings = onlinePayment ? getSslCommerzSettings() : null;
   const service = getAdminDb();
   const body = await readJson(request);
@@ -843,13 +849,15 @@ async function handleCreateOrder(request, response, { onlinePayment = false } = 
   }
   if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 30) throw new HttpError(400, "Your order must contain between 1 and 30 items.");
 
-  const customerId = auth.user.id;
-  const { error: profileError } = await service.from("profiles").upsert({
-    id: customerId,
-    full_name: customerName,
-    phone: customerPhone,
-  }, { onConflict: "id" });
-  assertNoDbError(profileError, "Your customer details could not be verified.");
+  const customerId = customerUser?.id ?? null;
+  if (customerId) {
+    const { error: profileError } = await service.from("profiles").upsert({
+      id: customerId,
+      full_name: customerName,
+      phone: customerPhone,
+    }, { onConflict: "id" });
+    assertNoDbError(profileError, "Your customer details could not be verified.");
+  }
 
   const requested = body.items.map((item) => {
     const productSlug = text(item?.productId, "Product", { min: 1, max: 120 });
@@ -900,7 +908,7 @@ async function handleCreateOrder(request, response, { onlinePayment = false } = 
     shipping_address: { address, city, postalCode, country: "Bangladesh", deliveryMethod },
     subtotal_bdt: subtotal, delivery_fee_bdt: deliveryFee,
     coupon_code: body.couponCode ? text(body.couponCode, "Coupon code", { min: 1, max: 64 }).trim().toUpperCase() : null,
-    redeem_rewards: body.redeemRewards === true,
+    redeem_rewards: Boolean(customerId) && body.redeemRewards === true,
     payment_transaction_id: transactionId,
     customer_note: text(body.customerNote ?? "", "Order note", { max: 1000, optional: true }) || null,
   };
