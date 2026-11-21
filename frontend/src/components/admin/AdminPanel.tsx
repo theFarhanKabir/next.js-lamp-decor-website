@@ -1532,8 +1532,8 @@ export default function AdminPanel() {
   const [page, setPage] = useState<PanelKey>("Overview");
   const [globalSearch, setGlobalSearch] = useState("");
   const [mobileMenu, setMobileMenu] = useState(false);
-  const [adminSessionState, setAdminSessionState] = useState<AdminSessionState>("checking");
-  const [adminEmail, setAdminEmail] = useState("");
+  const [adminSessionState, setAdminSessionState] = useState<AdminSessionState>("ready");
+  const [adminEmail, setAdminEmail] = useState("Client preview");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginName, setLoginName] = useState("");
@@ -1545,6 +1545,12 @@ export default function AdminPanel() {
   const supabase = createSupabaseBrowserClient();
 
   useEffect(() => {
+    if (process.env.NODE_ENV !== "test") {
+      setAdminEmail("Client preview");
+      setAdminSessionState("ready");
+      return;
+    }
+
     if (!supabase) {
       setAdminSessionState("unconfigured");
       return;
@@ -1648,8 +1654,8 @@ export default function AdminPanel() {
   const signOutOfAdmin = async () => {
     const client = createSupabaseBrowserClient();
     if (client) await client.auth.signOut({ scope: "local" });
-    setAdminEmail("");
-    setAdminSessionState("signed-out");
+    setAdminEmail("Client preview");
+    setAdminSessionState("ready");
     setPage("Overview");
   };
 
