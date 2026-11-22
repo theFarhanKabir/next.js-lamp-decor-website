@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity, ArrowUpRight, BadgePercent, BarChart3,
-  Bell, Boxes, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardList,
+  Bell, Boxes, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList,
   CircleHelp, CreditCard, Download, Ellipsis, Eye, FileImage, Filter, Gift,
   LayoutDashboard, ListFilter, LockKeyhole, Menu, MessageSquareText, Package,
   Plus, Search, Settings2, ShieldCheck, ShoppingBag, Sparkles, Tag, Trash2, TrendingUp,
@@ -23,8 +23,6 @@ type StoredOrder = { id: string; order_number: number; customer_name: string; cu
 type AdminOrderRow = { id: string; number: string; customer: string; email: string; date: string; items: number; total: number; status: OrderStatus; archivedAt: string | null; paymentStatus: string; paymentMethod: string; refundReference: string; method: string; courierStatus: string; trackingCode: string; returnStatus: string; events: StatusEvent[] };
 type AdminReview = { id: string; product_slug: string | null; customer_name: string; rating: number; title: string | null; body: string; status: "pending" | "published" | "hidden"; created_at: string; admin_reply: string | null };
 const orderStatuses: OrderStatus[] = ["Pending", "Confirmed", "Processing", "Shipped", "Delivered", "Cancelled", "Refunded"];
-
-type AdminSessionState = "checking" | "signed-out" | "not-admin" | "ready" | "unconfigured";
 
 const navigation: { label: PanelKey; icon: LucideIcon; group: "Store" | "Engage" | "Manage" }[] = [
   { label: "Overview", icon: LayoutDashboard, group: "Store" },
@@ -67,6 +65,19 @@ const money = (amount: number) => `৳${amount.toLocaleString("en-BD")}`;
 type ImageVariant = { url: string; width: number; height: number; storagePath: string; bytes?: number };
 type UploadedImage = { url: string; storagePath: string; variants: ImageVariant[] };
 type ImageRole = "product" | "color" | "hero" | "category" | "deal";
+const maxImageUploadBytes = 12 * 1024 * 1024;
+const imageAccept = ".jpg,.jpeg,.jpe,.jfif,.png,.webp,.avif,image/jpeg,image/png,image/webp,image/avif";
+const imageTypeByExtension: Record<string, string> = {
+  jpg: "image/jpeg", jpeg: "image/jpeg", jpe: "image/jpeg", jfif: "image/jpeg",
+  png: "image/png", webp: "image/webp", avif: "image/avif",
+};
+
+function getSupportedImageType(file: File) {
+  const mimeType = file.type.toLowerCase().split(";", 1)[0];
+  if (["image/jpeg", "image/png", "image/webp", "image/avif"].includes(mimeType)) return mimeType;
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return imageTypeByExtension[extension] ?? "";
+}
 
 async function optimizeImageInBrowser(file: File) {
   const bitmap = await createImageBitmap(file);
@@ -100,15 +111,16 @@ async function optimizeImageInBrowser(file: File) {
 }
 
 async function uploadOptimizedImage(file: File, role: ImageRole, productSlug = "", alt = file.name): Promise<UploadedImage> {
-  if (!["image/jpeg", "image/png", "image/webp", "image/avif"].includes(file.type) || file.size > 12 * 1024 * 1024) {
-    throw new Error("Use JPG, PNG, WebP, or AVIF images up to 12 MB.");
-  }
+  const contentType = getSupportedImageType(file);
+  if (!contentType) throw new Error(`${file.name}: choose a JPG, PNG, WebP, or AVIF image.`);
+  if (file.size > maxImageUploadBytes) throw new Error(`${file.name}: image must be 12 MB or smaller.`);
+  if (file.size === 0) throw new Error(`${file.name}: the selected file is empty.`);
 
   if (process.env.NEXT_PUBLIC_BACKEND_URL) {
     const response = await apiFetch("/api/admin/media", {
       method: "POST",
       headers: {
-        "Content-Type": file.type,
+        "Content-Type": contentType,
         "X-Image-Role": role,
         "X-Product-Slug": productSlug,
         "X-Image-Alt": alt,
@@ -549,6 +561,7 @@ function ProductsPage() {
   const [saving, setSaving] = useState(false);
   const [deletingSlug, setDeletingSlug] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
   const [imageDetails, setImageDetails] = useState<Record<string, { storagePath?: string; variants: ImageVariant[] }>>({});
   const [notice, setNotice] = useState("");
   const [noticeIsError, setNoticeIsError] = useState(false);
@@ -599,13 +612,9 @@ function ProductsPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Product could not be saved.";
       const lowerMessage = message.toLowerCase();
-      const actionableMessage = /administrator access is required|administrator account/.test(lowerMessage)
-        ? "Product was not saved: this account does not have the trusted Supabase admin role. Grant app_metadata.role = admin to this user's account, then sign out and sign in again."
-        : /sign in to continue|sign in with/.test(lowerMessage)
-          ? "Product was not saved: the backend did not receive a signed-in Supabase session. Sign in again on /admin, then retry."
-          : /supabase.*not connected|server key is not connected/.test(lowerMessage)
-            ? "Product was not saved: the backend's server-only Supabase key is missing or invalid. Check SUPABASE_SECRET_KEY in the backend environment."
-            : message;
+      const actionableMessage = /supabase.*not connected|server key is not connected/.test(lowerMessage)
+        ? "Product was not saved: the backend's server-only Supabase key is missing or invalid. Check SUPABASE_SECRET_KEY in the backend environment."
+        : message;
       setNotice(actionableMessage); setNoticeIsError(true);
     }
     finally { setSaving(false); }
@@ -632,26 +641,45 @@ function ProductsPage() {
     event.target.value = "";
     if (!files.length) return;
     setUploading(true);
+    setNotice("");
     try {
       const uploaded: UploadedImage[] = [];
-      for (const file of files) {
-        uploaded.push(await uploadOptimizedImage(file, "product", form.slug || form.name, form.name || file.name));
+      const failed: string[] = [];
+      for (const [index, file] of files.entries()) {
+        setUploadProgress(`Uploading ${index + 1} of ${files.length}: ${file.name}`);
+        try {
+          uploaded.push(await uploadOptimizedImage(file, "product", form.slug || form.name, form.name || file.name));
+        } catch (cause) {
+          failed.push(cause instanceof Error ? cause.message : `${file.name}: upload failed.`);
+        }
       }
-      setForm((current) => ({ ...current, images: [current.images, ...uploaded.map((image) => image.url)].filter(Boolean).join("\n") }));
-      setImageDetails((current) => ({ ...current, ...Object.fromEntries(uploaded.map((image) => [image.url, { storagePath: image.storagePath, variants: image.variants }])) }));
-      setNotice(`${uploaded.length} image${uploaded.length === 1 ? "" : "s"} optimized and uploaded.`);
-    } catch (err) { setNotice(err instanceof Error ? err.message : "Image upload failed."); }
-    finally { setUploading(false); }
+      if (uploaded.length) {
+        setForm((current) => ({ ...current, images: [current.images, ...uploaded.map((image) => image.url)].filter(Boolean).join("\n") }));
+        setImageDetails((current) => ({ ...current, ...Object.fromEntries(uploaded.map((image) => [image.url, { storagePath: image.storagePath, variants: image.variants }])) }));
+      }
+      if (failed.length) {
+        setNotice(`${uploaded.length} of ${files.length} images uploaded. ${failed.join(" · ")}`);
+        setNoticeIsError(true);
+      } else {
+        setNotice(`${uploaded.length} image${uploaded.length === 1 ? "" : "s"} optimized and uploaded.`);
+        setNoticeIsError(false);
+      }
+    } finally { setUploading(false); setUploadProgress(""); }
   };
   const uploadSwatchImage = async (index: number, file?: File) => {
     if (!file) return;
     setUploading(true);
+    setUploadProgress(`Uploading finish image: ${file.name}`);
+    setNotice("");
     try {
       const image = await uploadOptimizedImage(file, "color", form.slug || form.name, file.name);
       setSwatches((current) => current.map((swatch, row) => row === index ? { ...swatch, imageUrl: image.url, imageVariants: image.variants } : swatch));
       setNotice("Colour image optimized and uploaded.");
-    } catch (err) { setNotice(err instanceof Error ? err.message : "Image upload failed."); }
-    finally { setUploading(false); }
+      setNoticeIsError(false);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Image upload failed.");
+      setNoticeIsError(true);
+    } finally { setUploading(false); setUploadProgress(""); }
   };
   const beginNewProduct = () => {
     setForm({ name: "", slug: "", sku: "", category_slug: "lamps", subcategory_name: "Table Lamps", short_description: "", description: "", price_bdt: "", cost_price_bdt: "", compare_at_price_bdt: "", inventory_quantity: "0", status: "draft", promotion: "", made_to_order: false, lead_time: "", width: "", depth: "", height: "", top: "", weight: "", materials: "", finish: "", assembly: "", care: "", warranty: "", sizes: "Small:0, Medium:6400, Large:12000", images: "", special_edition: false });
@@ -660,17 +688,39 @@ function ProductsPage() {
     setSwatches([{ label: "Natural Oak", color: "#c8a96e", imageUrl: "" }]); setNotice(""); setNoticeIsError(false); setEditing(true);
   };
   return <><SectionHeading title="Products" description="Manage product details, options, inventory, and storefront visibility." action={<Button onClick={beginNewProduct}><Plus size={15} /> Add product</Button>} />
-    {error && <div role="alert" className="mb-4 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-4 text-[12px] text-[#8f493b]">{error}{/administrator/i.test(error) && <p className="mt-1 text-[10px]">Grant this account the trusted app_metadata.role = admin claim, then sign in again.</p>}{/not configured/i.test(error) && <p className="mt-1 text-[10px]">Check the frontend Supabase URL and publishable key, backend server key, and database migrations.</p>}</div>}
-    {notice && <div role={noticeIsError ? "alert" : "status"} className={`mb-4 rounded-lg border p-3 text-[11px] ${noticeIsError ? "border-[#ead4ca] bg-[#fff5f0] text-[#8f493b]" : "border-[#dce8d8] bg-[#f2f7ef] text-[#587052]"}`}>{notice}</div>}
+    {error && <div role="alert" className="mb-4 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-4 text-[12px] text-[#8f493b]">{error}{/not configured/i.test(error) && <p className="mt-1 text-[10px]">Check the frontend Supabase URL and publishable key, backend server key, and database migrations.</p>}</div>}
+    {notice && !editing && <div role={noticeIsError ? "alert" : "status"} className={`mb-4 rounded-lg border p-3 text-[11px] ${noticeIsError ? "border-[#ead4ca] bg-[#fff5f0] text-[#8f493b]" : "border-[#dce8d8] bg-[#f2f7ef] text-[#587052]"}`}>{notice}</div>}
     <PanelCard><div className="flex flex-wrap items-center gap-2 border-b border-[#f0ece6] p-4"><div className="w-full sm:max-w-[320px]"><SearchField value={query} onChange={setQuery} placeholder="Search products or SKU…" /></div><span className="ml-auto text-[10px] text-[#9a9388]">{loading ? "Loading…" : `${rows.length} products in Supabase`}</span></div><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left"><thead className="bg-white text-[9px] uppercase tracking-[.1em] text-[#948c80]"><tr>{["Product", "Category", "Price", "Inventory", "Status", "Storefront", ""].map((label) => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead><tbody>{rows.map((p) => <tr key={p.id} className="border-t border-[#f3f0ea] text-[11px]"><td className="px-4 py-3"><div className="flex items-center gap-3">{p.product_images?.[0]?.public_url && <img src={p.product_images[0].public_url} alt="" className="h-10 w-10 rounded-lg object-cover" />}<div><p className="font-semibold">{p.name}</p><p className="mt-1 text-[9px] text-[#9c958a]">{p.sku || p.slug}</p></div></div></td><td className="px-4 py-3">{p.category} · {p.subcategory}</td><td className="px-4 py-3">{money(Number(p.price_bdt))}</td><td className="px-4 py-3">{p.inventory_quantity}</td><td className="px-4 py-3"><StatusPill>{p.status === "active" ? "Active" : p.status === "archived" ? "Archived" : "Draft"}</StatusPill></td><td className="px-4 py-3"><select value={p.status} onChange={(e) => void changeStatus(p.slug, e.target.value)} className="rounded border border-[#e9e4dc] bg-white p-2 text-[10px]"><option value="draft">Draft</option><option value="active">Publish</option><option value="archived">Archive</option></select></td><td className="px-4 py-3"><div className="flex items-center gap-1"><button onClick={() => editProduct(p)} className="rounded-md px-2 py-1.5 text-[10px] font-semibold text-[#8d6437] hover:bg-white">Edit</button><button disabled={deletingSlug === p.slug} onClick={() => void deleteProduct(p)} className="rounded-md px-2 py-1.5 text-[10px] font-semibold text-[#9d5548] hover:bg-[#fbefec] disabled:opacity-50">{deletingSlug === p.slug ? "Deleting..." : "Delete"}</button></div></td></tr>)}</tbody></table>{!loading && rows.length === 0 && <p className="p-8 text-center text-[11px] text-[#928a7f]">{error ? "Connect Supabase to manage products." : "No saved products yet. Add your first product."}</p>}</div></PanelCard>
-    {editing && <div role="presentation" className="fixed inset-0 z-50 flex justify-end bg-black/40" onMouseDown={(e) => { if (e.target === e.currentTarget) setEditing(false); }}><form onSubmit={save} className="h-full w-full max-w-3xl overflow-y-auto bg-white p-5 shadow-2xl sm:p-8"><div className="flex items-start justify-between"><div><h2 className="text-xl font-semibold">Add storefront product</h2><p className="mt-1 text-[11px] text-[#928a7e]">Product details, size pricing, finishes, dimensions, materials, and product media.</p></div><button type="button" onClick={() => setEditing(false)}><X size={18} /></button></div>
+    {editing && <div role="presentation" className="fixed inset-0 z-50 flex justify-end bg-black/40" onMouseDown={(e) => { if (e.target === e.currentTarget && !uploading) setEditing(false); }}><form onSubmit={save} className="h-full w-full max-w-3xl overflow-y-auto bg-white p-5 shadow-2xl sm:p-8"><div className="flex items-start justify-between"><div><h2 className="text-xl font-semibold">Add storefront product</h2><p className="mt-1 text-[11px] text-[#928a7e]">Product details, size pricing, finishes, dimensions, materials, and product media.</p></div><button type="button" disabled={uploading} aria-label="Close product editor" onClick={() => setEditing(false)} className="rounded-md p-2 text-[#716a60] hover:bg-[#f5f3ef] disabled:cursor-wait disabled:opacity-40"><X size={18} /></button></div>
+      {notice && <div role={noticeIsError ? "alert" : "status"} aria-live="polite" className={`mt-4 rounded-lg border p-3 text-[11px] ${noticeIsError ? "border-[#ead4ca] bg-[#fff5f0] text-[#8f493b]" : "border-[#dce8d8] bg-[#f2f7ef] text-[#587052]"}`}>{notice}</div>}
       <div className="mt-6 grid gap-4 sm:grid-cols-2">{field("name", "Product name", "Cortez Outdoor Table")}{field("slug", "URL slug (optional)", "cortez-outdoor-table")}{field("sku", "SKU", "CL-0001")}<label className="block text-[10px] font-medium text-[#716a60]">Department<select value={form.category_slug} onChange={(e) => setForm({ ...form, category_slug: e.target.value })} className="mt-1.5 h-10 w-full rounded-lg border px-3 text-[11px]">{[["lamps","Lamps"],["mirrors","Mirrors"],["tables","Tables"],["shades","Shades"]].map(([v,l]) => <option key={v} value={v}>{l}</option>)}</select></label><label className="block text-[10px] font-medium text-[#716a60]">Subcategory<input value={form.subcategory_name} onChange={(e) => setForm({ ...form, subcategory_name: e.target.value })} placeholder="e.g. Table Lamps" className="mt-1.5 h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] text-[#454139] outline-none focus:border-[#c9a06a]" /></label>{field("price_bdt", "Selling price (BDT)", "35300", "number")}{field("cost_price_bdt", "Unit cost (BDT)", "21000", "number")}{field("compare_at_price_bdt", "Original price (optional)", "47300", "number")}{field("inventory_quantity", "Stock quantity", "0", "number")}{field("lead_time", "Made to order lead time", "4–6 weeks")}<label className="block text-[10px] font-medium text-[#716a60]">Collection filter<select value={form.promotion} onChange={(event) => setForm({ ...form, promotion: event.target.value })} className="mt-1.5 h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px]"><option value="">None</option><option value="new">New Arrivals</option><option value="sale">Hot Deals</option></select><span className="mt-1 block text-[9px] font-normal text-[#928a7e]">Controls the New Arrivals / Hot Deals filters on collection pages.</span></label></div>
       <label className="mt-4 block text-[10px] font-medium text-[#716a60]">Short description<input value={form.short_description} onChange={(e) => setForm({ ...form, short_description: e.target.value })} className="mt-1.5 h-10 w-full rounded-lg border px-3 text-[11px]" /></label><label className="mt-4 block text-[10px] font-medium text-[#716a60]">Full description<textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="mt-1.5 w-full rounded-lg border p-3 text-[11px]" /></label>
       <h3 className="mt-5 text-[12px] font-semibold text-[#222]">Default dimensions</h3><p className="mt-1 text-[10px] text-[#777]">Used as a fallback for sizes that do not have their own dimensions.</p><div className="mt-3 grid gap-4 sm:grid-cols-2">{field("width", "Width", "55 cm")}{field("depth", "Depth", "45 cm")}{field("height", "Height", "52 cm")}{field("top", "Top / surface", "Solid surface")}{field("weight", "Weight", "8 kg")}</div>
       {parseOptions(form.sizes).map(({ label }) => <section key={label} className="mt-4 rounded-xl border border-[#eee8df] bg-[#fcfbf9] p-4"><h4 className="text-[11px] font-semibold text-[#48443d]">{label} dimensions</h4><p className="mt-1 text-[9px] text-[#928a7e]">These values appear when customers select {label}.</p><div className="mt-3 grid gap-3 sm:grid-cols-2">{([ ["width", "Width", "55 cm"], ["depth", "Depth", "45 cm"], ["height", "Height", "52 cm"], ["top", "Top / surface", "Solid surface"], ["weight", "Weight", "8 kg"] ] as const).map(([key, title, placeholder]) => <label key={key} className="block text-[10px] font-medium text-[#716a60]">{title}<input value={sizeDimensions[label]?.[key] ?? ""} onChange={(event) => setSizeDimensions((current) => ({ ...current, [label]: { ...current[label], [key]: event.target.value } }))} placeholder={placeholder} className="mt-1.5 h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[11px] text-[#454139] outline-none focus:border-[#c9a06a]" /></label>)}</div></section>)}
       <h3 className="mt-5 text-[12px] font-semibold text-[#222]">Materials and care details</h3><p className="mt-1 text-[10px] text-[#777]">Materials also powers the storefront material filter. Add colour options in the palette below.</p><div className="mt-3 grid gap-4 sm:grid-cols-2">{field("materials", "Materials (comma separated)", "Solid wood, marble, or metal")}{field("finish", "Finish", "Hand-finished surface")}{field("assembly", "Assembly", "Simple home assembly")}{field("care", "Care", "Wipe with a soft dry cloth")}{field("warranty", "Warranty", "1-year quality cover")}{field("sizes", "Sizes and price adjustment (Label:BDT delta, comma separated)", "Small:0, Medium:6400, Large:12000")}</div>
-            <section className="mt-5 rounded-xl border border-[#eee8df] bg-white p-4"><div className="mb-3 flex items-start justify-between gap-3"><div><h3 className="text-[12px] font-semibold text-[#48443d]">Colour finishes</h3><p className="mt-1 text-[10px] text-[#928a7e]">Choose a finish name, swatch colour, and the product photo customers should see for that finish.</p></div><button type="button" onClick={() => setSwatches((current) => [...current, { label: "", color: "#c8a96e", imageUrl: "" }])} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[#e8dfd2] bg-white px-3 py-2 text-[10px] font-medium text-[#805d35]"><Plus size={13} /> Add finish</button></div><div className="space-y-3">{swatches.map((swatch, index) => <div key={index} className="grid gap-2 rounded-lg border border-[#eee8df] bg-white p-3 sm:grid-cols-[1fr_82px_1.4fr_auto] sm:items-end"><label className="block text-[9px] font-medium text-[#716a60]">Finish name<input value={swatch.label} onChange={(event) => setSwatches((current) => current.map((item, row) => row === index ? { ...item, label: event.target.value } : item))} placeholder="Natural Oak" className="mt-1 h-9 w-full rounded-md border border-[#e9e4dc] px-2 text-[11px] outline-none focus:border-[#c9a06a]" /></label><label className="block text-[9px] font-medium text-[#716a60]">Swatch<input type="color" value={swatch.color} onChange={(event) => setSwatches((current) => current.map((item, row) => row === index ? { ...item, color: event.target.value } : item))} className="mt-1 h-9 w-full rounded-md border border-[#e9e4dc] bg-white p-1" /></label><div><label className="inline-flex cursor-pointer items-center gap-1 text-[9px] text-[#8d6437]"><FileImage size={12} /> Upload finish image<input type="file" accept="image/jpeg,image/png,image/webp,image/avif" onChange={(event) => { void uploadSwatchImage(index, event.target.files?.[0]); event.target.value = ""; }} className="sr-only" /></label></div><div className="flex items-center gap-2">{swatch.imageUrl && <><img src={swatch.imageUrl} alt={`${swatch.label || "Finish"} preview`} className="h-9 w-9 rounded-md object-cover" /><button type="button" onClick={() => setSwatches((current) => current.map((item, row) => row === index ? { ...item, imageUrl: "" } : item))} className="text-[9px] text-[#8d6437]">Remove image</button></>}<button type="button" aria-label="Remove colour finish" disabled={swatches.length === 1} onClick={() => setSwatches((current) => current.filter((_, row) => row !== index))} className="rounded-md px-2 py-2 text-[#948c80] hover:bg-white disabled:opacity-30"><X size={14} /></button></div></div>)}</div></section>
-      <section className="mt-4"><label className="block text-[10px] font-medium text-[#716a60]">Upload product images<input type="file" accept="image/jpeg,image/png,image/webp,image/avif" multiple onChange={(e) => void uploadImages(e)} className="mt-1.5 block w-full text-[11px]" />{uploading && <span className="mt-1 block text-[#8d6437]">Uploading…</span>}</label>{form.images && <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">{form.images.split(/\n|,/).filter(Boolean).map((url, index) => <div key={`${url}-${index}`} className="relative"><img src={url.trim()} alt={`${form.name || "Product"} photo ${index + 1}`} className="h-20 w-full rounded-md border border-[#e9e4dc] object-cover" /><button type="button" aria-label={`Remove product image ${index + 1}`} onClick={() => setForm((current) => ({ ...current, images: current.images.split(/\n|,/).map((item) => item.trim()).filter(Boolean).filter((_, itemIndex) => itemIndex !== index).join("\n") }))} className="absolute right-1 top-1 rounded-full bg-white px-2 py-1 text-[9px] shadow">Remove</button></div>)}</div>}<p className="mt-2 text-[9px] text-[#928a7e]">Upload JPG, PNG, WebP, or AVIF images. The first image is the main product photo.</p></section><div className="mt-4 flex flex-wrap gap-5 text-[11px]"><label><input type="checkbox" checked={form.made_to_order} onChange={(e) => setForm({ ...form, made_to_order: e.target.checked })} /> Made to order</label><label><input type="checkbox" checked={form.special_edition} onChange={(e) => setForm({ ...form, special_edition: e.target.checked })} /> Special edition</label><label><input type="checkbox" checked={form.status === "active"} onChange={(e) => setForm({ ...form, status: e.target.checked ? "active" : "draft" })} /> Publish immediately</label></div><div className="sticky bottom-0 mt-6 flex justify-end gap-2 border-t bg-white py-4"><Button variant="secondary" onClick={() => setEditing(false)}>Cancel</Button><Button type="submit" disabled={saving || uploading}>{saving ? "Saving…" : "Save product"}</Button></div></form></div>}
+            <section className="mt-5 rounded-xl border border-[#eee8df] bg-white p-4"><div className="mb-3 flex items-start justify-between gap-3"><div><h3 className="text-[12px] font-semibold text-[#48443d]">Colour finishes</h3><p className="mt-1 text-[10px] text-[#928a7e]">Choose a finish name, swatch colour, and the product photo customers should see for that finish.</p></div><button type="button" disabled={uploading} onClick={() => setSwatches((current) => [...current, { label: "", color: "#c8a96e", imageUrl: "" }])} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[#e8dfd2] bg-white px-3 py-2 text-[10px] font-medium text-[#805d35] disabled:cursor-wait disabled:opacity-60"><Plus size={13} /> Add finish</button></div><div className="space-y-3">{swatches.map((swatch, index) => <div key={index} className="grid gap-2 rounded-lg border border-[#eee8df] bg-white p-3 sm:grid-cols-[minmax(0,1fr)_88px_minmax(190px,auto)_auto] sm:items-center"><label className="block text-[9px] font-medium text-[#716a60]">Finish name<input value={swatch.label} onChange={(event) => setSwatches((current) => current.map((item, row) => row === index ? { ...item, label: event.target.value } : item))} placeholder="Natural Oak" className="mt-1 h-9 w-full rounded-md border border-[#e9e4dc] px-2 text-[11px] outline-none focus:border-[#c9a06a]" /></label><label className="block text-[9px] font-medium text-[#716a60]">Swatch<input type="color" value={swatch.color} onChange={(event) => setSwatches((current) => current.map((item, row) => row === index ? { ...item, color: event.target.value } : item))} className="mt-1 h-9 w-full rounded-md border border-[#e9e4dc] bg-white p-1" /></label><div><label className={"inline-flex min-h-10 min-w-[190px] cursor-pointer items-center justify-center gap-2 rounded-lg border border-[#dcd3c6] bg-white px-3 text-[10px] font-medium text-[#514a40] shadow-sm transition " + (uploading ? "pointer-events-none opacity-60" : "hover:border-[#b99a70] hover:bg-[#faf8f4]")}><FileImage size={14} />{uploading ? "Uploading..." : swatch.imageUrl ? "Replace finish image" : "Choose finish image"}<input type="file" accept={imageAccept} disabled={uploading} aria-label={`Upload image for ${swatch.label || "finish"}`} onChange={(event) => { void uploadSwatchImage(index, event.target.files?.[0]); event.target.value = ""; }} className="sr-only" /></label></div><div className="flex items-center gap-2">{swatch.imageUrl && <><img src={swatch.imageUrl} alt={`${swatch.label || "Finish"} preview`} className="h-9 w-9 rounded-md object-cover" /><button type="button" disabled={uploading} onClick={() => setSwatches((current) => current.map((item, row) => row === index ? { ...item, imageUrl: "" } : item))} className="text-[9px] text-[#8d6437] disabled:opacity-50">Remove image</button></>}<button type="button" aria-label="Remove colour finish" disabled={swatches.length === 1 || uploading} onClick={() => setSwatches((current) => current.filter((_, row) => row !== index))} className="rounded-md px-2 py-2 text-[#948c80] hover:bg-white disabled:opacity-30"><X size={14} /></button></div></div>)}</div></section>
+      <section className="mt-5 rounded-xl border border-[#eee8df] bg-[#fcfbf9] p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-[12px] font-semibold text-[#34312c]">Product images</h3>
+            <p className="mt-1 text-[10px] text-[#827b70]">JPG, PNG, WebP, or AVIF - up to 12 MB each. The first image is the main product photo.</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-[#827b70]">{form.images.split(/\n|,/).filter(Boolean).length} selected</span>
+            <label className={`inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-[#dcd3c6] bg-white px-3 text-[11px] font-medium text-[#514a40] shadow-sm transition hover:border-[#b99a70] hover:bg-[#faf8f4] focus-within:ring-2 focus-within:ring-[#c9a06a] ${uploading ? "pointer-events-none opacity-60" : ""}`}>
+              <FileImage size={14} />{uploading ? "Uploading..." : "Choose files"}
+              <input type="file" accept={imageAccept} multiple disabled={uploading} aria-label="Choose product images" onChange={(event) => void uploadImages(event)} className="sr-only" />
+            </label>
+          </div>
+        </div>
+        {uploading && <p role="status" aria-live="polite" className="mt-3 text-[10px] text-[#8d6437]">{uploadProgress || "Preparing image upload..."}</p>}
+        {form.images && <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {form.images.split(/\n|,/).filter(Boolean).map((url, index) => <div key={`${url}-${index}`} className="group relative overflow-hidden rounded-lg border border-[#e9e4dc] bg-white">
+            <img src={url.trim()} alt={`${form.name || "Product"} photo ${index + 1}`} loading="lazy" decoding="async" className="h-28 w-full object-cover" />
+            <div className="flex items-center justify-between gap-2 px-2.5 py-2"><span className="truncate text-[9px] text-[#827b70]">{index === 0 ? "Main product photo" : `Product photo ${index + 1}`}</span><button type="button" aria-label={`Remove product image ${index + 1}`} onClick={() => setForm((current) => ({ ...current, images: current.images.split(/\n|,/).map((item) => item.trim()).filter(Boolean).filter((_, itemIndex) => itemIndex !== index).join("\n") }))} className="shrink-0 rounded-md px-2 py-1 text-[9px] font-medium text-[#8c554b] hover:bg-[#fbefec]">Remove</button></div>
+          </div>)}
+        </div>}
+      </section><div className="mt-4 flex flex-wrap gap-5 text-[11px]"><label><input type="checkbox" checked={form.made_to_order} onChange={(e) => setForm({ ...form, made_to_order: e.target.checked })} /> Made to order</label><label><input type="checkbox" checked={form.special_edition} onChange={(e) => setForm({ ...form, special_edition: e.target.checked })} /> Special edition</label><label><input type="checkbox" checked={form.status === "active"} onChange={(e) => setForm({ ...form, status: e.target.checked ? "active" : "draft" })} /> Publish immediately</label></div><div className="sticky bottom-0 mt-6 flex justify-end gap-2 border-t bg-white py-4"><Button variant="secondary" disabled={uploading} onClick={() => setEditing(false)}>Cancel</Button><Button type="submit" disabled={saving || uploading}>{saving ? "Saving…" : "Save product"}</Button></div></form></div>}
   </>;
 }
 
@@ -725,7 +775,7 @@ function CategoriesPage() {
   };
   return <>
     <SectionHeading title="Categories" description="Rename or remove subcategories shown across product listings and navigation. Main departments are protected." />
-    {error && <div role="alert" className="mb-3 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] text-[#9d5548]">{error}{/sign in to continue|sign in with an administrator account/i.test(error) && <button type="button" onClick={async () => { const client = createSupabaseBrowserClient(); if (client) await client.auth.signOut({ scope: "local" }); window.location.reload(); }} className="ml-2 inline-flex font-semibold underline">Sign out and sign in to admin</button>}</div>}
+    {error && <div role="alert" className="mb-3 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] text-[#9d5548]">{error}</div>}
     {notice && <p role="status" className="mb-3 rounded-lg border border-[#dce8d8] bg-[#f2f7ef] p-3 text-[11px] text-[#587052]">{notice}</p>}
     <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{parents.map((category) => <button key={category.id} onClick={() => setActiveId(category.id)} className={`rounded-xl border p-4 text-left transition ${activeId === category.id ? "border-[#171717] bg-white" : "border-[#e5e5e5] bg-white hover:border-[#bdbdbd]"}`}><span className="flex items-center justify-between"><span className="text-[12px] font-semibold text-[#222]">{category.name}</span><LockKeyhole size={13} className="text-[#737373]" /></span><span className="mt-2 block text-[10px] text-[#737373]">{categories.filter((item) => item.parent_id === category.id).length} subcategories · Fixed</span></button>)}</div>
     <PanelCard><div className="flex items-center justify-between border-b border-[#e5e5e5] px-5 py-4"><div><h2 className="text-[13px] font-semibold text-[#222]">Subcategories in {selected?.name ?? "department"}</h2><p className="mt-1 text-[10px] text-[#737373]">Renaming keeps the saved category link stable.</p></div><span className="rounded-md bg-[#f3f3f3] px-2.5 py-1.5 text-[10px] text-[#555]">Department name fixed</span></div>
@@ -1283,7 +1333,7 @@ function MediaPage() {
   };
 
   return <>
-    <SectionHeading title="Media library" description="Archive hides files from this library while keeping existing image URLs intact." action={<label className={"inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#252723] px-4 py-2.5 text-[11px] font-medium text-white hover:bg-black " + (view === "archive" ? "pointer-events-none opacity-50" : "")}><Plus size={15} /> {uploading ? "Uploading..." : "Add media"}<input type="file" accept="image/jpeg,image/png,image/webp,image/avif" onChange={upload} disabled={uploading || view === "archive"} className="sr-only" /></label>} />
+    <SectionHeading title="Media library" description="Archive hides files from this library while keeping existing image URLs intact." action={<label className={"inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#252723] px-4 py-2.5 text-[11px] font-medium text-white hover:bg-black " + (view === "archive" ? "pointer-events-none opacity-50" : "")}><Plus size={15} /> {uploading ? "Uploading..." : "Add media"}<input type="file" accept={imageAccept} onChange={upload} disabled={uploading || view === "archive"} className="sr-only" /></label>} />
     <div className="mb-4 flex flex-wrap items-center gap-3">
       <div className="flex gap-2" role="group" aria-label="Media library views">
         <Button variant={view === "active" ? "primary" : "secondary"} onClick={() => setView("active")}>Active media</Button>
@@ -1324,7 +1374,7 @@ function HomepageImageField({ label, role, value, imageVariants, onChange }: { l
     finally { setUploading(false); }
   };
   const srcSet = imageVariants?.map((variant) => `${variant.url} ${variant.width}w`).join(", ") || undefined;
-  return <div className="min-w-0"><label className="block text-[10px] font-medium text-[#716a60]">{label}<input value={value} onChange={(event) => onChange(event.target.value, [])} className="mt-1.5 h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[10px] text-[#454139] outline-none focus:border-[#c9a06a]" /></label><div className="mt-2 flex items-center gap-3"><input type="file" accept="image/jpeg,image/png,image/webp,image/avif" onChange={(event) => void upload(event)} className="min-w-0 flex-1 text-[10px]" />{uploading && <span className="text-[10px] text-[#8d6437]">Uploading…</span>}</div>{error && <p role="alert" className="mt-1 text-[10px] text-[#9d5548]">{error}</p>}{value && <img src={value} srcSet={srcSet} sizes="(max-width: 1024px) 100vw, 50vw" alt="" className="mt-2 h-24 w-full rounded-lg border border-[#ece6dd] bg-white object-cover" />}</div>;
+  return <div className="min-w-0"><label className="block text-[10px] font-medium text-[#716a60]">{label}<input value={value} onChange={(event) => onChange(event.target.value, [])} className="mt-1.5 h-10 w-full rounded-lg border border-[#e9e4dc] bg-white px-3 text-[10px] text-[#454139] outline-none focus:border-[#c9a06a]" /></label><div className="mt-2 flex items-center gap-3"><input type="file" accept={imageAccept} onChange={(event) => void upload(event)} className="min-w-0 flex-1 text-[10px]" />{uploading && <span className="text-[10px] text-[#8d6437]">Uploading…</span>}</div>{error && <p role="alert" className="mt-1 text-[10px] text-[#9d5548]">{error}</p>}{value && <img src={value} srcSet={srcSet} sizes="(max-width: 1024px) 100vw, 50vw" alt="" className="mt-2 h-24 w-full rounded-lg border border-[#ece6dd] bg-white object-cover" />}</div>;
 }
 
 const defaultCollectionOptions = [
@@ -1430,7 +1480,7 @@ function HomepageContentPage() {
   return <>
     <SectionHeading title="Homepage content" description="Manage hero slides, category cards, New Arrivals, and Hot Deals on the storefront." action={<Button disabled={saving || loading} onClick={() => void save()}><Check size={14} /> {saving ? "Saving…" : "Save homepage"}</Button>} />
     <div className="mb-4 rounded-lg border border-[#e8dfd2] bg-white p-3 text-[11px] leading-5 text-[#716a60]">The current web images and copy are preloaded. They stay in place until you upload or enter replacement images and save. Uploaded media is stored in Supabase Storage.</div>
-    {error && <p role="alert" className="mb-3 rounded-lg bg-[#fbefec] p-3 text-[11px] text-[#9d5548]">{error}{error.includes("not configured") && <span className="block">Configure Supabase, apply migrations, and sign in with an administrator account.</span>}</p>}
+    {error && <p role="alert" className="mb-3 rounded-lg bg-[#fbefec] p-3 text-[11px] text-[#9d5548]">{error}{error.includes("not configured") && <span className="block">Configure Supabase and apply the required database migrations.</span>}</p>}
     {notice && <p role="status" className="mb-3 rounded-lg bg-[#f1f6ee] p-3 text-[11px] text-[#587052]">{notice}</p>}
     {!loading && unavailableArrivalCount + unavailableDealCount > 0 && <div role="status" className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#e8dfd2] bg-white p-3 text-[11px] text-[#716a60]"><span>{unavailableArrivalCount + unavailableDealCount} homepage link{unavailableArrivalCount + unavailableDealCount === 1 ? "" : "s"} point to unavailable or archived products. Reactivate them in Products or remove the links here.</span><Button variant="secondary" onClick={removeUnavailableProductLinks}>Remove unavailable links</Button></div>}
     {loading ? <PanelCard className="p-8 text-center text-xs text-[#928a7f]">Loading homepage settings…</PanelCard> : <>
@@ -1532,132 +1582,7 @@ export default function AdminPanel() {
   const [page, setPage] = useState<PanelKey>("Overview");
   const [globalSearch, setGlobalSearch] = useState("");
   const [mobileMenu, setMobileMenu] = useState(false);
-  const [adminSessionState, setAdminSessionState] = useState<AdminSessionState>("ready");
-  const [adminEmail, setAdminEmail] = useState("Client preview");
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [loginName, setLoginName] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
-  const [loginError, setLoginError] = useState("");
-  const [authNotice, setAuthNotice] = useState("");
-  const [loginPending, setLoginPending] = useState(false);
-  const supabase = createSupabaseBrowserClient();
-
-  useEffect(() => {
-    if (process.env.NODE_ENV !== "test") {
-      setAdminEmail("Client preview");
-      setAdminSessionState("ready");
-      return;
-    }
-
-    if (!supabase) {
-      setAdminSessionState("unconfigured");
-      return;
-    }
-
-    let active = true;
-    const applySession = (session: Awaited<ReturnType<typeof supabase.auth.getSession>>["data"]["session"]) => {
-      if (!active) return;
-      if (!session) {
-        setAdminEmail("");
-        setAdminSessionState("signed-out");
-        return;
-      }
-      setAdminEmail(session.user.email ?? "");
-      setAdminSessionState(session.user.app_metadata?.role === "admin" ? "ready" : "not-admin");
-    };
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => applySession(session));
-    void supabase.auth.getSession().then(({ data, error }) => {
-      if (!active) return;
-      if (error) {
-        setLoginError("Could not read your Supabase session. Refresh this page and try again.");
-        setAdminSessionState("signed-out");
-        return;
-      }
-      applySession(data.session);
-    });
-
-    return () => {
-      active = false;
-      subscription.unsubscribe();
-    };
-  }, [supabase]);
-
-  const submitAdminAuth = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setLoginError("");
-    setAuthNotice("");
-    setLoginPending(true);
-    const client = createSupabaseBrowserClient();
-    if (!client) {
-      setLoginError("Supabase browser settings are missing from this frontend build. Configure the public Supabase URL and publishable key, then rebuild and restart the frontend.");
-      setAdminSessionState("unconfigured");
-      setLoginPending(false);
-      return;
-    }
-
-    if (authMode === "signup") {
-      if (loginPassword.length < 8) {
-        setLoginError("Choose a password with at least 8 characters.");
-        setLoginPending(false);
-        return;
-      }
-      if (loginPassword !== confirmPassword) {
-        setLoginError("Your passwords do not match.");
-        setLoginPending(false);
-        return;
-      }
-
-      const callback = new URL("/auth/callback", window.location.origin);
-      callback.searchParams.set("next", "/admin");
-      callback.searchParams.set("audience", "admin");
-      const { data, error } = await client.auth.signUp({
-        email: loginEmail.trim(),
-        password: loginPassword,
-        options: { emailRedirectTo: callback.toString(), data: { full_name: loginName.trim() } },
-      });
-      setLoginPending(false);
-      if (error) {
-        setLoginError(error.message);
-        return;
-      }
-
-      setLoginPassword("");
-      setConfirmPassword("");
-      setAuthMode("signin");
-      setAdminSessionState(data.session ? "not-admin" : "signed-out");
-      setAuthNotice(data.session
-        ? "Your account was created. It does not have admin access yet. Grant the trusted admin role, then sign in again here."
-        : "Your account was created. Confirm your email if Supabase asks, grant the trusted admin role, then sign in here.");
-      return;
-    }
-
-    const { data, error } = await client.auth.signInWithPassword({ email: loginEmail.trim(), password: loginPassword });
-    setLoginPending(false);
-    if (error) {
-      setLoginError(error.message);
-      return;
-    }
-    if (data.user?.app_metadata?.role !== "admin") {
-      setAdminEmail(data.user?.email ?? loginEmail.trim());
-      setAdminSessionState("not-admin");
-      setLoginError("This account can sign in, but it does not have the trusted admin role. Ask the project owner to grant app_metadata.role = admin.");
-      return;
-    }
-    setAdminEmail(data.user.email ?? loginEmail.trim());
-    setLoginPassword("");
-    setAdminSessionState("ready");
-  };
-
-  const signOutOfAdmin = async () => {
-    const client = createSupabaseBrowserClient();
-    if (client) await client.auth.signOut({ scope: "local" });
-    setAdminEmail("Client preview");
-    setAdminSessionState("ready");
-    setPage("Overview");
-  };
+  const adminEmail = "Local development";
 
   const pageDescriptions: Record<PanelKey, string> = { Overview: "Store performance at a glance", Orders: "Manage orders and fulfillment", "Custom requests": "Review customer ideas and reference material", Products: "Manage your product catalogue", Categories: "Organize your catalogue", Customers: "Customer directory and activity", Reviews: "Customer product feedback", Coupons: "Discounts and promotions", Rewards: "Customer loyalty programme", "Media library": "Images used in your store", "Homepage content": "Manage hero, category, and hot deal imagery", Analytics: "Store performance and trends", Settings: "Store preferences and team access" };
   const Content = useMemo(() => {
@@ -1679,43 +1604,10 @@ export default function AdminPanel() {
   }, [page]);
   const renderNav = (group: "Store" | "Engage" | "Manage") => <div className="mb-5"><p className="mb-2 px-3 text-[9px] font-semibold uppercase tracking-[.16em] text-[#858585]">{group}</p><div className="space-y-0.5">{navigation.filter((item) => item.group === group).map(({ label, icon: Icon }) => <button key={label} onClick={() => { setPage(label); setMobileMenu(false); }} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[11px] transition ${page === label ? "bg-[#171717] font-semibold text-white" : "text-[#555555] hover:bg-[#f3f3f3] hover:text-black"}`}><Icon size={15} strokeWidth={1.8} />{label}</button>)}</div></div>;
 
-  if (adminSessionState !== "ready") {
-    const statusMessage = adminSessionState === "checking"
-      ? "Checking your Supabase session…"
-      : adminSessionState === "unconfigured"
-        ? "Supabase browser settings are missing from this frontend build. Configure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, then rebuild and restart the frontend."
-        : adminSessionState === "not-admin"
-          ? "You are signed in, but this account does not have the trusted Supabase admin role."
-          : "Sign in here to open your admin workspace. You will stay on this admin page.";
-
-    return <div className="admin-panel flex min-h-screen items-center justify-center bg-[#f7f7f7] px-4 py-10 text-[#171717] [font-family:Inter,ui-sans-serif,system-ui,sans-serif]">
-      <main className="w-full max-w-[440px] rounded-2xl border border-[#ece6dd] bg-white p-7 shadow-sm sm:p-9">
-        <div className="mb-8 flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#252723] text-[#d6b17a]"><span className="font-serif text-[17px]">C</span></div><div><p className="text-[12px] font-semibold tracking-[.04em] text-[#312e28]">CLOUD LAMPS</p><p className="mt-0.5 text-[8px] font-medium uppercase tracking-[.2em] text-[#9b7547]">Store admin</p></div></div>
-        <p className="mb-2 text-[9px] font-medium uppercase tracking-[.16em] text-[#a77b47]">Admin workspace</p>
-        <h1 className="font-serif text-[28px]">{adminSessionState === "checking" ? "Opening admin" : "Sign in to admin"}</h1>
-        <p className="mt-2 text-[12px] leading-5 text-[#777168]">{statusMessage}</p>
-        {adminSessionState === "checking" && <p className="mt-6 animate-pulse text-[12px] text-[#8d6437]">Please wait…</p>}
-        {(adminSessionState === "signed-out" || adminSessionState === "not-admin") && <form onSubmit={submitAdminAuth} className="mt-6 space-y-4">
-          {authMode === "signup" && <label className="block"><span className="mb-1.5 block text-[11px] font-medium text-[#4a463f]">Full name</span><input required autoComplete="name" value={loginName} onChange={(event) => setLoginName(event.target.value)} className="h-11 w-full rounded-lg border border-[#e8e0d4] px-3 text-[12px] outline-none focus:border-[#a67c3d]" /></label>}
-          <label className="block"><span className="mb-1.5 block text-[11px] font-medium text-[#4a463f]">Email</span><input required type="email" autoComplete="username" value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} className="h-11 w-full rounded-lg border border-[#e8e0d4] px-3 text-[12px] outline-none focus:border-[#a67c3d]" /></label>
-          <label className="block"><span className="mb-1.5 block text-[11px] font-medium text-[#4a463f]">Password</span><input required minLength={authMode === "signup" ? 8 : undefined} type="password" autoComplete={authMode === "signup" ? "new-password" : "current-password"} value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} className="h-11 w-full rounded-lg border border-[#e8e0d4] px-3 text-[12px] outline-none focus:border-[#a67c3d]" /></label>
-          {authMode === "signup" && <label className="block"><span className="mb-1.5 block text-[11px] font-medium text-[#4a463f]">Confirm password</span><input required minLength={8} type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} className="h-11 w-full rounded-lg border border-[#e8e0d4] px-3 text-[12px] outline-none focus:border-[#a67c3d]" /></label>}
-          {authNotice && <p role="status" className="rounded-lg border border-[#d9e4d3] bg-[#f3f7f0] p-3 text-[11px] leading-5 text-[#536c4e]">{authNotice}</p>}
-          {loginError && <p role="alert" className="rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] leading-5 text-[#8f493b]">{loginError}</p>}
-          <button type="submit" disabled={loginPending} className="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-[#171717] px-4 text-[12px] font-semibold text-white transition hover:bg-[#333] disabled:cursor-wait disabled:opacity-50">{loginPending ? authMode === "signup" ? "Creating account…" : "Signing in…" : authMode === "signup" ? "Create account" : "Sign in to admin"}</button>
-          <p className="text-center text-[11px] text-[#777168]">{authMode === "signup" ? "Already registered?" : "Need an account?"} <button type="button" onClick={() => { setAuthMode(authMode === "signup" ? "signin" : "signup"); setLoginError(""); setAuthNotice(""); }} className="font-semibold text-[#8d6437] underline underline-offset-4">{authMode === "signup" ? "Sign in" : "Create one"}</button></p>
-        </form>}
-        {adminSessionState === "unconfigured" && <p role="alert" className="mt-6 rounded-lg border border-[#ead4ca] bg-[#fff5f0] p-3 text-[11px] leading-5 text-[#8f493b]">{loginError || statusMessage}</p>}
-        {adminSessionState === "not-admin" && adminEmail && <p className="mt-4 text-[10px] text-[#928a7f]">Signed in as {adminEmail}</p>}
-        <a href="/" className="mt-7 inline-flex text-[11px] font-medium text-[#8d6437] underline underline-offset-4">Return to the storefront</a>
-      </main>
-    </div>;
-  }
-
   return <div className="admin-panel min-h-screen bg-[#f7f7f7] text-[#171717] [font-family:Inter,ui-sans-serif,system-ui,sans-serif]">
     {mobileMenu && <button aria-label="Close navigation" className="fixed inset-0 z-30 bg-black/30 lg:hidden" onClick={() => setMobileMenu(false)} />}
-    <aside className={`fixed inset-y-0 left-0 z-40 flex w-[238px] flex-col border-r border-[#ece6dd] bg-white px-3 transition-transform lg:translate-x-0 ${mobileMenu ? "translate-x-0" : "-translate-x-full"}`}><div className="flex h-[68px] items-center gap-3 border-b border-[#eee8df] px-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#252723] text-[#d6b17a]"><span className="font-serif text-[16px]">C</span></div><div><p className="text-[12px] font-semibold tracking-[.04em] text-[#312e28]">CLOUD LAMPS</p><p className="mt-0.5 text-[8px] font-medium uppercase tracking-[.2em] text-[#9b7547]">Store studio</p></div><span className="ml-auto rounded-md border border-[#e9e2d7] px-1.5 py-1 text-[8px] uppercase tracking-wider text-[#827b70]">Admin</span></div><nav className="min-h-0 flex-1 overflow-y-auto px-1 pt-5">{renderNav("Store")}{renderNav("Engage")}{renderNav("Manage")}</nav><div className="border-t border-[#eee8df] px-2 py-3"><div className="flex items-center gap-2.5 rounded-lg p-2"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-[10px] font-semibold text-[#775832]">{adminEmail.slice(0, 2).toUpperCase() || "AD"}</div><div className="min-w-0 flex-1"><p className="truncate text-[10px] font-semibold text-[#49443c]">Store administrator</p><p className="truncate text-[9px] text-[#a09a90]">{adminEmail}</p></div><button type="button" onClick={() => void signOutOfAdmin()} className="rounded-md px-2 py-1 text-[9px] font-semibold text-[#8d6437] hover:bg-[#f7f4ef]">Sign out</button></div></div></aside>
-    <div className="min-h-screen lg:pl-[238px]"><header className="sticky top-0 z-20 flex h-[62px] items-center gap-4 border-b border-[#ece6dd] bg-white/95 px-4 backdrop-blur sm:px-7"><button aria-label="Open navigation" onClick={() => setMobileMenu(true)} className="rounded-md p-2 text-[#716a60] hover:bg-white lg:hidden"><Menu size={18} /></button><div className="hidden items-center gap-2 text-[10px] text-[#a19a90] sm:flex"><span>Store</span><ChevronRight size={12} /><span className="font-medium text-[#4b463e]">{page}</span></div><div className="ml-auto flex items-center gap-2 sm:gap-3"><label className="hidden h-9 w-[230px] items-center gap-2 rounded-lg border border-[#e9e4dc] bg-white px-2.5 text-[#9a9388] md:flex"><Search size={14} /><input value={globalSearch} onChange={(e) => setGlobalSearch(e.target.value)} placeholder="Search anything…" className="min-w-0 flex-1 bg-transparent text-[10px] outline-none placeholder:text-[#aaa399]" /><kbd className="rounded border border-[#e9e4dc] px-1 py-0.5 text-[8px]">⌘ K</kbd></label><button aria-label="Notifications" className="relative rounded-lg p-2 text-[#777168] hover:bg-white"><Bell size={16} /><span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[#bd8547]" /></button><div className="hidden h-6 border-l border-[#e9e4dc] sm:block" /><button className="flex items-center gap-2 rounded-lg p-1 hover:bg-white"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[9px] font-semibold text-[#775832]">AD</span><ChevronDown size={12} className="text-[#827b70]" /></button></div></header>
-      <main className="mx-auto max-w-[1500px] px-4 py-6 sm:px-7 sm:py-8"><div className="mb-6 flex items-center justify-between"><div><p className="text-[9px] font-medium uppercase tracking-[.16em] text-[#a77b47]">Cloud Lamps &amp; Mirrors <span className="px-1.5 text-[#c7b9a4]">/</span> Admin</p><p className="mt-1 text-[10px] text-[#aaa297]">{pageDescriptions[page]}</p></div><div className="hidden items-center gap-2 text-[9px] text-[#9a9388] sm:flex"><span className="h-1.5 w-1.5 rounded-full bg-[#9aaf8c]" />Admin workspace</div></div>{globalSearch && <div className="mb-4 rounded-lg border border-[#e8dfd2] bg-white px-4 py-2.5 text-[10px] text-[#716a60]">Search preview: “{globalSearch}” · Use the search field inside a section to filter its records.</div>}{Content}<footer className="mt-8 flex flex-wrap justify-between gap-2 border-t border-[#ece6dd] pt-4 text-[9px] text-[#aaa297]"><span>Cloud Lamps &amp; Mirrors · Store management</span><span className="flex items-center gap-1"><CircleHelp size={11} /> Admin mutations require your trusted Supabase admin role</span></footer></main></div>
+    <aside className={`fixed inset-y-0 left-0 z-40 flex w-[238px] flex-col border-r border-[#ece6dd] bg-white px-3 transition-transform lg:translate-x-0 ${mobileMenu ? "translate-x-0" : "-translate-x-full"}`}><div className="flex h-[68px] items-center gap-3 border-b border-[#eee8df] px-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#252723] text-[#d6b17a]"><span className="font-serif text-[16px]">C</span></div><div><p className="text-[12px] font-semibold tracking-[.04em] text-[#312e28]">CLOUD LAMPS</p><p className="mt-0.5 text-[8px] font-medium uppercase tracking-[.2em] text-[#9b7547]">Store studio</p></div><span className="ml-auto rounded-md border border-[#e9e2d7] px-1.5 py-1 text-[8px] uppercase tracking-wider text-[#827b70]">Admin</span></div><nav className="min-h-0 flex-1 overflow-y-auto px-1 pt-5">{renderNav("Store")}{renderNav("Engage")}{renderNav("Manage")}</nav><div className="border-t border-[#eee8df] px-2 py-3"><div className="flex items-center gap-2.5 rounded-lg p-2"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-[10px] font-semibold text-[#775832]">{adminEmail.slice(0, 2).toUpperCase() || "AD"}</div><div className="min-w-0 flex-1"><p className="truncate text-[10px] font-semibold text-[#49443c]">Store administrator</p><p className="truncate text-[9px] text-[#a09a90]">{adminEmail}</p></div></div></div></aside>
+    <div className="min-h-screen lg:pl-[238px]"><header className="sticky top-0 z-20 flex h-[62px] items-center gap-4 border-b border-[#ece6dd] bg-white/95 px-4 backdrop-blur sm:px-7"><button aria-label="Open navigation" onClick={() => setMobileMenu(true)} className="rounded-md p-2 text-[#716a60] hover:bg-white lg:hidden"><Menu size={18} /></button><div className="hidden items-center gap-2 text-[10px] text-[#a19a90] sm:flex"><span>Store</span><ChevronRight size={12} /><span className="font-medium text-[#4b463e]">{page}</span></div><div className="ml-auto flex items-center gap-2 sm:gap-3"><label className="hidden h-9 w-[230px] items-center gap-2 rounded-lg border border-[#e9e4dc] bg-white px-2.5 text-[#9a9388] md:flex"><Search size={14} /><input value={globalSearch} onChange={(e) => setGlobalSearch(e.target.value)} placeholder="Search anything…" className="min-w-0 flex-1 bg-transparent text-[10px] outline-none placeholder:text-[#aaa399]" /><kbd className="rounded border border-[#e9e4dc] px-1 py-0.5 text-[8px]">⌘ K</kbd></label><button aria-label="Notifications" className="relative rounded-lg p-2 text-[#777168] hover:bg-white"><Bell size={16} /><span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[#bd8547]" /></button><div className="hidden h-6 border-l border-[#e9e4dc] sm:block" /><span aria-label="Local admin" className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[9px] font-semibold text-[#775832]">AD</span></div></header>
+      <main className="mx-auto max-w-[1500px] px-4 py-6 sm:px-7 sm:py-8"><div className="mb-6 flex items-center justify-between"><div><p className="text-[9px] font-medium uppercase tracking-[.16em] text-[#a77b47]">Cloud Lamps &amp; Mirrors <span className="px-1.5 text-[#c7b9a4]">/</span> Admin</p><p className="mt-1 text-[10px] text-[#aaa297]">{pageDescriptions[page]}</p></div><div className="hidden items-center gap-2 text-[9px] text-[#9a9388] sm:flex"><span className="h-1.5 w-1.5 rounded-full bg-[#9aaf8c]" />Admin workspace</div></div>{globalSearch && <div className="mb-4 rounded-lg border border-[#e8dfd2] bg-white px-4 py-2.5 text-[10px] text-[#716a60]">Search preview: “{globalSearch}” · Use the search field inside a section to filter its records.</div>}{Content}<footer className="mt-8 flex flex-wrap justify-between gap-2 border-t border-[#ece6dd] pt-4 text-[9px] text-[#aaa297]"><span>Cloud Lamps &amp; Mirrors · Store management</span><span className="flex items-center gap-1"><CircleHelp size={11} /> Local development admin access</span></footer></main></div>
   </div>;
 }

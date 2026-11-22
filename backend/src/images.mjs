@@ -3,7 +3,7 @@ import sharp from "sharp";
 import { config } from "./config.mjs";
 import { HttpError } from "./validation.mjs";
 
-const allowedInputFormats = new Set(["jpeg", "png", "webp", "avif"]);
+const allowedInputFormats = new Set(["jpeg", "png", "webp"]);
 const outputWidths = [480, 960, 1600];
 const maxInputPixels = 40_000_000;
 
@@ -14,7 +14,8 @@ export async function optimizeImage(input) {
   let metadata;
   try { metadata = await sharp(input, { limitInputPixels: maxInputPixels, failOn: "error" }).metadata(); }
   catch { throw new HttpError(400, "This image could not be read. Try a standard JPG, PNG, WebP, or AVIF file."); }
-  if (!allowedInputFormats.has(metadata.format)) throw new HttpError(415, "Upload a JPG, PNG, WebP, or AVIF image.");
+  const isAvif = metadata.format === "heif" && (metadata.mediaType === "image/avif" || metadata.compression === "av1");
+  if (!allowedInputFormats.has(metadata.format) && !isAvif) throw new HttpError(415, "Upload a JPG, PNG, WebP, or AVIF image.");
   if (!metadata.width || !metadata.height || metadata.width * metadata.height > maxInputPixels) {
     throw new HttpError(413, "Image dimensions are too large to process safely.");
   }
@@ -30,7 +31,7 @@ export async function optimizeImage(input) {
       .toBuffer({ resolveWithObject: true });
     variants.push({ maxEdge, width: info.width, height: info.height, buffer: data, contentType: "image/webp" });
   }
-  return { variants, original: { width: metadata.width, height: metadata.height, format: metadata.format } };
+  return { variants, original: { width: metadata.width, height: metadata.height, format: isAvif ? "avif" : metadata.format } };
 }
 
 export async function uploadOptimizedImage(service, { input, folder, bucket = config.storeMediaBucket }) {

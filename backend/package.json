@@ -13,7 +13,7 @@
     "check": "node --check src/server.mjs && node --check src/config.mjs && node --check src/supabase.mjs && node --check src/images.mjs && node --check src/validation.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "2.117.3",
+    "@supabase/supabase-js": "2.119.2",
     "sharp": "0.35.5"
   }
 }

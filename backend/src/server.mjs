@@ -152,6 +152,14 @@ function assertNoDbError(error, message = "The data request could not be complet
 }
 
 async function admin(request) {
+  const remoteAddress = request.socket?.remoteAddress;
+  const loopbackRequest = remoteAddress === "127.0.0.1" || remoteAddress === "::1" || remoteAddress === "::ffff:127.0.0.1";
+  const loopbackHost = config.host === "127.0.0.1" || config.host === "::1";
+  if (config.localAdminAuthDisabled && loopbackHost && loopbackRequest) {
+    const service = getServiceClient();
+    if (!service) throw new HttpError(503, "The Supabase server key is not connected yet.");
+    return { user: { id: null, email: "Local development", app_metadata: { role: "admin" } }, service };
+  }
   const result = await requireAdmin(request);
   if (result.error) throw new HttpError(result.error.status, result.error.message);
   return result;
@@ -603,8 +611,6 @@ async function handleCategories(request, response, method) {
 
 async function handleImageUpload(request, response) {
   const auth = await admin(request);
-  const contentType = String(request.headers["content-type"] ?? "").split(";")[0].toLowerCase();
-  if (!["image/jpeg", "image/png", "image/webp", "image/avif"].includes(contentType)) throw new HttpError(415, "Upload a JPG, PNG, WebP, or AVIF image.");
   const input = await readBytes(request, config.maxImageBytes);
   const role = String(request.headers["x-image-role"] ?? "product");
   if (!["product", "color", "hero", "category", "deal"].includes(role)) throw new HttpError(400, "Choose a product, colour, hero, category, or deal image role.");
