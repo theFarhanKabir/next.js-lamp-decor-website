@@ -155,7 +155,7 @@ async function admin(request) {
   const remoteAddress = request.socket?.remoteAddress;
   const loopbackRequest = remoteAddress === "127.0.0.1" || remoteAddress === "::1" || remoteAddress === "::ffff:127.0.0.1";
   const loopbackHost = config.host === "127.0.0.1" || config.host === "::1";
-  if (config.localAdminAuthDisabled && loopbackHost && loopbackRequest) {
+  if ((config.localAdminAuthDisabled && loopbackHost && loopbackRequest) || config.allowUnauthenticatedAdmin) {
     const service = getServiceClient();
     if (!service) throw new HttpError(503, "The Supabase server key is not connected yet.");
     return { user: { id: null, email: "Local development", app_metadata: { role: "admin" } }, service };
@@ -1965,6 +1965,7 @@ server.keepAliveTimeout = 5_000;
 server.listen(config.port, config.host, () => {
   console.log(`Cloud Lamps API listening on http://${config.host}:${config.port} (${process.version})`);
   console.log(hasSupabaseAuth ? "Supabase authentication is configured." : "Supabase is not connected; database routes will remain unavailable.");
+  if (config.allowUnauthenticatedAdmin) console.warn("WARNING: Unauthenticated admin API access is enabled. Anyone who can reach this API can modify store data.");
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

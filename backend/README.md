@@ -6,7 +6,7 @@ Standalone Node.js API for the storefront and admin data model. The Next.js brow
 
 - Production target: Node.js **24.21.0 LTS**, pinned in `.nvmrc`.
 - `npm ci` (from `backend/`)
-- The service reads the parent project's `.env.local`; an optional `backend/.env` overrides those values. For local development only, `LOCAL_ADMIN_AUTH_DISABLED=true` enables loopback-only admin API access through the server-side Supabase key; the API must remain bound to `127.0.0.1` or `::1`. The bypass is disabled in production and whenever the API binds to a non-loopback address. Restart both apps after changing it.
+- The service reads the parent project's `.env.local`; an optional `backend/.env` overrides those values. For local development only, `LOCAL_ADMIN_AUTH_DISABLED=true` enables loopback-only admin API access through the server-side Supabase key; the API must remain bound to `127.0.0.1` or `::1`. For a temporary hosted preview, `ALLOW_UNAUTHENTICATED_ADMIN=true` disables admin API authentication in any environment. This exposes all admin API operations to anyone who can reach the API, so remove the variable after the preview. Restart the backend after changing it.
 - `npm run dev` starts the API; `npm run dev:watch` starts it with file watching; `npm start` starts it normally.
 - `npm run check` checks the JavaScript module syntax.
 - Default local address: `http://127.0.0.1:4000`.

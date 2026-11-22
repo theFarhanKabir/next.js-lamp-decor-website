@@ -6,6 +6,7 @@ export const config = Object.freeze({
   host: process.env.HOST || (process.env.VERCEL ? "0.0.0.0" : "127.0.0.1"),
   port: Number.isInteger(port) && port > 0 && port < 65536 ? port : 4000,
   localAdminAuthDisabled: process.env.NODE_ENV !== "production" && process.env.LOCAL_ADMIN_AUTH_DISABLED === "true",
+  allowUnauthenticatedAdmin: process.env.ALLOW_UNAUTHENTICATED_ADMIN === "true",
   allowedOrigins: new Set((process.env.ALLOWED_ORIGINS || "http://localhost:3000").split(",").map((origin) => origin.trim()).filter(Boolean)),
   trustProxy: process.env.TRUST_PROXY === "true",
   supabaseUrl: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "",
